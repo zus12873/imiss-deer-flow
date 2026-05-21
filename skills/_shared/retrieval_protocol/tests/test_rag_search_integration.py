@@ -21,10 +21,19 @@ _RAG_SEARCH = _REPO_ROOT / "skills" / "custom" / "network-traffic-analysis" / "s
 
 
 def _load_rag_search():
-    """以模块方式加载真实 rag_search.py（仅执行模块级代码，不跑 main）。"""
+    """以模块方式加载真实 rag_search.py（仅执行模块级代码，不跑 main）。
+
+    临时关闭 bytecode 写入，避免在被测 skill 目录留下 ``__pycache__/*.pyc``
+    （该目录因 .gitignore 的 network-traffic 例外规则不会被忽略）。
+    """
     spec = importlib.util.spec_from_file_location("rag_search_under_test", _RAG_SEARCH)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
