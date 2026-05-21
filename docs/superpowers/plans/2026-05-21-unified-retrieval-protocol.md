@@ -37,13 +37,18 @@ skillresult` 输出（不破坏现有 `text` / `json`），用 `adapters` 真实
 ## 任务清单与状态
 
 1. [完成] 建包骨架 + 计划文档 + 特性分支
-2. [进行中] `schema.py` + `test_schema.py`
-3. [待办] `envelope.py` + `test_envelope.py`
-4. [待办] `evidence.py` + `test_evidence.py`
-5. [待办] `validate.py` + `test_validate.py`（§7 十条规则正反例）
-6. [待办] `adapters.py` + `test_adapters.py`（§6 四适配器，断言适配输出过校验）
-7. [待办] 接入 `rag_search.py` `--format skillresult` + 更新 SKILL.md
-8. [待办] `README.md` + 全量测试全绿 + 分步 commit
+2. [完成] `schema.py` + `test_schema.py`（15 用例）
+3. [完成] `envelope.py` + `test_envelope.py`（16 用例）
+4. [完成] `evidence.py` + `test_evidence.py`（18 用例）
+5. [完成] `validate.py` + `test_validate.py`（48 用例，§7 十条规则正反例）
+6. [完成] `adapters.py` + `test_adapters.py`（26 用例，§6 四适配器，断言适配输出过校验）
+7. [完成] 接入 `rag_search.py` `--format skillresult` + 更新 SKILL.md（集成测试 5 用例）
+8. [完成] `README.md` + 全量测试全绿 + 分步 commit
+
+**最终状态：128 个 unittest 用例全部通过。** 分两步 commit：
+
+- `feat: 新增统一检索协议库 retrieval_protocol`
+- `feat: network-traffic rag_search 支持统一 SkillResult 输出`
 
 ## 关键设计决策
 
@@ -60,9 +65,14 @@ skillresult` 输出（不破坏现有 `text` / `json`），用 `adapters` 真实
 ## 验证方式
 
 ```bash
-cd skills/_shared && python3 -m unittest discover -s retrieval_protocol/tests -v
+cd skills/_shared && python3 -m unittest discover -s retrieval_protocol/tests -t . -v
 python3 -m py_compile skills/custom/network-traffic-analysis/scripts/rag_search.py
 ```
 
-`rag_search.py` 端到端需 Elasticsearch，无法在本环境跑通；映射逻辑下沉到
-`adapters.build_network_traffic_skill_result`，由协议测试套件完整覆盖。
+已验证：128 用例全绿；`rag_search.py --help` 正常显示
+`--format {text,json,skillresult}`；集成测试加载真实 `rag_search.py` 并断言
+`_build_skill_result_output` 产出通过 §7 校验。
+
+`rag_search.py` 的 `--format skillresult` 端到端需 Elasticsearch，无法在本环境跑通；
+映射逻辑下沉到 `adapters.build_network_traffic_skill_result`，由协议测试套件 +
+集成测试完整覆盖。
