@@ -86,7 +86,7 @@ class TestInputEnvelope(unittest.TestCase):
             retrieval=envelope.build_retrieval_params(),
             filters=envelope.build_filters(city="Shanghai", anomaly_only=True),
         )
-        self.assertEqual(env["schema_version"], "1.0")
+        self.assertEqual(env["schema_version"], "1.1")
         self.assertEqual(env["skill_name"], "citybench-rag-search")
         self.assertEqual(env["scenario"], "spatiotemporal_trajectory")
         self.assertEqual(env["capability"], "evidence_search")

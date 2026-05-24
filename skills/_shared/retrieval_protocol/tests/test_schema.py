@@ -82,7 +82,8 @@ class TestEnums(unittest.TestCase):
         self.assertTrue(schema.SENSITIVE_LEVELS.issubset(schema.SENSITIVITY_LEVELS))
 
     def test_schema_version(self):
-        self.assertEqual(schema.SCHEMA_VERSION, "1.0")
+        # v1.1 增补 Envelope.budget 与 errors[] 标准化错误码。
+        self.assertEqual(schema.SCHEMA_VERSION, "1.1")
 
     def test_evidence_type_retrieval(self):
         self.assertEqual(schema.EVIDENCE_TYPE_RETRIEVAL, "retrieval")

@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .errors import validate_errors_block
 from .schema import (
     ACCESS_POLICIES,
     DATA_TYPES,
@@ -259,7 +260,7 @@ def validate_skill_result(skill_result: Any) -> list[str]:
     """校验完整 SkillResult（task.md §4.1）。
 
     覆盖规则 9（结构 = SkillResult JSON，非自然语言）、规则 8（附件登记）、
-    规则 3（evidence_id 唯一）及逐条 evidence 的规则 1–8。
+    规则 3（evidence_id 唯一）、schema v1.1 errors 标准化及逐条 evidence 的规则 1–8。
     """
     if not isinstance(skill_result, dict):
         return ["[rule 9] SkillResult must be a JSON object, not natural-language text"]
@@ -281,6 +282,11 @@ def validate_skill_result(skill_result: Any) -> list[str]:
 
     # 规则 9 + 3：result.evidence 列表与逐条校验。
     errors.extend(validate_evidence_list(result.get("evidence"), path="result.evidence"))
+
+    # schema v1.1：errors[] 与 status 联动校验。
+    status = skill_result.get("status")
+    if isinstance(status, str) and status:
+        errors.extend(validate_errors_block(skill_result.get("errors"), status=status))
     return errors
 
 
@@ -360,4 +366,26 @@ def validate_input_envelope(envelope: Any) -> list[str]:
     elif isinstance(filters, dict) and "time_range" in filters:
         errors.extend(validate_time_range(filters["time_range"], path="input.filters.time_range", rule="§3.3"))
 
+    # schema v1.1：顶层 budget(可选)。
+    if "budget" in envelope:
+        errors.extend(validate_budget(envelope["budget"], path="budget"))
+
     return errors
+
+
+def validate_budget(budget: Any, *, path: str = "budget") -> list[str]:
+    """校验 Envelope.budget(schema v1.1)。两个字段都可选,至少一个必须给出。"""
+    if not isinstance(budget, dict):
+        return [f"[v1.1] {path} must be an object"]
+    issues: list[str] = []
+    allowed = {"max_evidence_count", "max_token_estimate"}
+    seen_known = False
+    for key in allowed:
+        if key in budget:
+            seen_known = True
+            value = budget[key]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                issues.append(f"[v1.1] {path}.{key} must be a positive integer, got {value!r}")
+    if not seen_known:
+        issues.append(f"[v1.1] {path} requires at least one of {sorted(allowed)}")
+    return issues
