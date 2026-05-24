@@ -292,3 +292,398 @@ def adapt_policy_hit(
 def adapt_policy_result(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """把 policies-regulations RAG 的命中列表整体映射成 evidence wrapper 列表。"""
     return [adapt_policy_hit(hit, rank=index) for index, hit in enumerate(hits, start=1)]
+
+
+# ===========================================================================
+# schema v1.1：剩余 6 类数据 adapter
+#
+# 设计原则:
+# 1. 每个 adapter 接受**原生命中字典**(各 RAG 自己的输出形态),返回标准 evidence
+#    wrapper(payload 为 §4.2 evidence_unit)。
+# 2. 图像 / 视频的二进制附件由上层 skill 在装配 SkillResult 时挂到
+#    ``result.artifacts[]``,本层只在 evidence_unit 里保留可定位指针(bbox、tile_id、
+#    clip_start/end)和文本描述。
+# 3. 字段缺失一律采用「不写」策略 —— 校验时 §7 各规则会自动放行可选项。
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# §v1.1 traffic_flow（交通流量,结构化 + 时空）
+# ---------------------------------------------------------------------------
+
+
+def adapt_traffic_flow_hit(
+    hit: dict[str, Any],
+    *,
+    rank: int | None = None,
+    source_id: str = "traffic_flow_stream",
+) -> dict[str, Any]:
+    """traffic_flow 命中映射。预期字段:``doc_id`` / ``summary`` / ``geohash`` /
+    ``city`` / ``time_bucket`` / ``flow_count`` / ``peak_hour`` / ``avg_speed`` /
+    ``congestion_level`` / ``wow_change_pct`` / ``anomaly_flag``。
+    """
+    feature_keys = ("flow_count", "peak_hour", "avg_speed", "congestion_level",
+                    "wow_change_pct", "anomaly_flag")
+    features = {key: hit[key] for key in feature_keys if hit.get(key) is not None}
+
+    geo: dict[str, Any] = {}
+    if hit.get("city"):
+        geo["city"] = hit["city"]
+    if hit.get("geohash"):
+        geo["geohash"] = hit["geohash"]
+    if hit.get("bbox"):
+        geo["bbox"] = hit["bbox"]
+
+    time_range = None
+    if hit.get("time_start") and hit.get("time_end"):
+        time_range = {
+            "mode": "absolute",
+            "start": hit["time_start"],
+            "end": hit["time_end"],
+            "timezone": hit.get("timezone") or "Asia/Shanghai",
+        }
+
+    payload = build_evidence_unit(
+        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        data_type="traffic_flow",
+        text=_first_nonempty(hit.get("summary"), hit.get("text"), hit.get("title")),
+        source_id=hit.get("source_id") or source_id,
+        source_path=hit.get("source_path") or None,
+        time_range=time_range,
+        geo_scope=geo,
+        granularity=hit.get("granularity") or "road_segment_hour",
+        features=features,
+    )
+    return build_retrieval_evidence(
+        evidence_ref=hit.get("doc_id") or "",
+        rank=rank,
+        score=hit.get("score"),
+        method="bm25_vector_rrf",
+        rrf_k=60,
+        matched_fields=["summary"],
+        payload=payload,
+    )
+
+
+def adapt_traffic_flow_result(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [adapt_traffic_flow_hit(hit, rank=index) for index, hit in enumerate(hits, start=1)]
+
+
+# ---------------------------------------------------------------------------
+# §v1.1 telecom（电话网络,结构化 + 社区/聚合特征）
+# ---------------------------------------------------------------------------
+
+
+def adapt_telecom_hit(
+    hit: dict[str, Any],
+    *,
+    rank: int | None = None,
+    source_id: str = "telecom_cdr",
+) -> dict[str, Any]:
+    """telecom CDR 命中映射。预期字段:``doc_id`` / ``summary`` / ``call_count`` /
+    ``unique_contacts`` / ``community_id`` / ``duration_sum``。
+
+    电话数据**强 PII**,默认按 ``sensitivity_level=pii_masked`` /
+    ``access_policy=restricted`` 标注,各 skill 不要降级。
+    """
+    feature_keys = ("call_count", "unique_contacts", "community_id",
+                    "duration_sum", "anomaly_flag")
+    features = {key: hit[key] for key in feature_keys if hit.get(key) is not None}
+
+    time_range = None
+    if hit.get("time_start") and hit.get("time_end"):
+        time_range = {
+            "mode": "absolute",
+            "start": hit["time_start"],
+            "end": hit["time_end"],
+            "timezone": hit.get("timezone") or "Asia/Shanghai",
+        }
+
+    payload = build_evidence_unit(
+        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        data_type="telecom",
+        text=_first_nonempty(hit.get("summary"), hit.get("text"), hit.get("title")),
+        source_id=hit.get("source_id") or source_id,
+        source_path=hit.get("source_path") or None,
+        time_range=time_range,
+        geo_scope={},  # 通联本身无空间属性;若上层做了基站聚合,在 features 里给 cell_id。
+        granularity=hit.get("granularity") or "user_window",
+        sensitivity_level=hit.get("sensitivity_level") or "pii_masked",
+        access_policy=hit.get("access_policy") or "restricted",
+        features=features,
+    )
+    return build_retrieval_evidence(
+        evidence_ref=hit.get("doc_id") or "",
+        rank=rank,
+        score=hit.get("score"),
+        method="bm25_vector_rrf",
+        rrf_k=60,
+        matched_fields=["summary"],
+        payload=payload,
+    )
+
+
+def adapt_telecom_result(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [adapt_telecom_hit(hit, rank=index) for index, hit in enumerate(hits, start=1)]
+
+
+# ---------------------------------------------------------------------------
+# §v1.1 code（代码片段,文本 + 精确定位）
+# ---------------------------------------------------------------------------
+
+
+def adapt_code_hit(
+    hit: dict[str, Any],
+    *,
+    rank: int | None = None,
+    source_id: str = "code_index",
+) -> dict[str, Any]:
+    """code 命中映射。预期字段:``doc_id`` / ``snippet`` / ``file_path`` /
+    ``line_start`` / ``line_end`` / ``lang`` / ``ast_node_type`` / ``symbol``。
+
+    ``snippet → text``;``file_path + line_start/end → locator``;
+    ``lang / ast_node_type / symbol`` 进 ``features``。
+    """
+    locator = build_locator(
+        file_path=hit.get("file_path"),
+        line_start=hit.get("line_start"),
+        line_end=hit.get("line_end"),
+        symbol=hit.get("symbol"),
+    )
+    features = {
+        key: hit[key]
+        for key in ("doc_id", "snippet", "lang", "ast_node_type", "symbol", "repo")
+        if hit.get(key) is not None
+    }
+
+    raw_scores: dict[str, Any] = {}
+    if hit.get("bm25_score") is not None:
+        raw_scores["bm25_score"] = hit["bm25_score"]
+    if hit.get("vector_score") is not None:
+        raw_scores["vector_score"] = hit["vector_score"]
+
+    payload = build_evidence_unit(
+        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        data_type="code",
+        text=_first_nonempty(hit.get("snippet"), hit.get("text"), hit.get("summary")),
+        source_id=hit.get("source_id") or source_id,
+        source_path=hit.get("source_path") or hit.get("file_path") or None,
+        geo_scope={},  # 代码无空间属性;保持对象。
+        granularity=hit.get("granularity") or "snippet",
+        locator=locator if locator else None,
+        features=features,
+    )
+    return build_retrieval_evidence(
+        evidence_ref=hit.get("doc_id") or "",
+        rank=rank,
+        score=hit.get("score"),
+        method="bm25_vector_rrf",
+        raw_scores=raw_scores or None,
+        matched_fields=["snippet", "symbol"],
+        payload=payload,
+    )
+
+
+def adapt_code_result(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [adapt_code_hit(hit, rank=index) for index, hit in enumerate(hits, start=1)]
+
+
+# ---------------------------------------------------------------------------
+# §v1.1 streetview（街景图像,目标检测 + bbox）
+# ---------------------------------------------------------------------------
+
+
+def adapt_streetview_hit(
+    hit: dict[str, Any],
+    *,
+    rank: int | None = None,
+    source_id: str = "streetview_index",
+) -> dict[str, Any]:
+    """streetview 命中映射。预期字段:``doc_id`` / ``caption`` / ``objects`` /
+    ``bbox`` / ``taken_at`` / ``lat`` / ``lon`` / ``city`` / ``image_uri``。
+
+    图像本体由上层挂到 ``result.artifacts[]``;本层只保留 ``image_uri``
+    至 ``features``,以便上层装配 artifact。
+    """
+    features = {
+        key: hit[key]
+        for key in ("objects", "bbox", "taken_at", "heading", "image_uri")
+        if hit.get(key) is not None
+    }
+
+    geo: dict[str, Any] = {}
+    if hit.get("city"):
+        geo["city"] = hit["city"]
+    if hit.get("lat") is not None:
+        geo["lat"] = hit["lat"]
+    if hit.get("lon") is not None:
+        geo["lon"] = hit["lon"]
+    if hit.get("bbox"):
+        geo["bbox"] = hit["bbox"]
+
+    time_range = None
+    if hit.get("taken_at"):
+        time_range = {
+            "mode": "absolute",
+            "start": hit["taken_at"],
+            "end": hit["taken_at"],
+            "timezone": hit.get("timezone") or "Asia/Shanghai",
+        }
+
+    payload = build_evidence_unit(
+        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        data_type="streetview",
+        text=_first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary")),
+        source_id=hit.get("source_id") or source_id,
+        source_path=hit.get("source_path") or hit.get("image_uri") or None,
+        time_range=time_range,
+        geo_scope=geo,
+        granularity=hit.get("granularity") or "image",
+        features=features,
+    )
+    return build_retrieval_evidence(
+        evidence_ref=hit.get("doc_id") or "",
+        rank=rank,
+        score=hit.get("score"),
+        method="clip_vector",
+        matched_fields=["caption", "objects"],
+        payload=payload,
+    )
+
+
+def adapt_streetview_result(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [adapt_streetview_hit(hit, rank=index) for index, hit in enumerate(hits, start=1)]
+
+
+# ---------------------------------------------------------------------------
+# §v1.1 remote_sensing（卫星遥感,瓦片 + 变化检测）
+# ---------------------------------------------------------------------------
+
+
+def adapt_remote_sensing_hit(
+    hit: dict[str, Any],
+    *,
+    rank: int | None = None,
+    source_id: str = "remote_sensing_index",
+) -> dict[str, Any]:
+    """remote_sensing 命中映射。预期字段:``doc_id`` / ``caption`` / ``objects`` /
+    ``bbox`` / ``tile_id`` / ``taken_at`` / ``change_score`` / ``image_uri``。
+    """
+    features = {
+        key: hit[key]
+        for key in ("objects", "bbox", "tile_id", "taken_at", "change_score",
+                    "cloud_cover", "image_uri")
+        if hit.get(key) is not None
+    }
+
+    geo: dict[str, Any] = {}
+    if hit.get("bbox"):
+        geo["bbox"] = hit["bbox"]
+    if hit.get("city"):
+        geo["city"] = hit["city"]
+    if hit.get("district"):
+        geo["district"] = hit["district"]
+
+    time_range = None
+    if hit.get("taken_at"):
+        time_range = {
+            "mode": "absolute",
+            "start": hit["taken_at"],
+            "end": hit.get("taken_at_end") or hit["taken_at"],
+            "timezone": hit.get("timezone") or "Asia/Shanghai",
+        }
+
+    payload = build_evidence_unit(
+        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        data_type="remote_sensing",
+        text=_first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary")),
+        source_id=hit.get("source_id") or source_id,
+        source_path=hit.get("source_path") or hit.get("image_uri") or None,
+        time_range=time_range,
+        geo_scope=geo,
+        granularity=hit.get("granularity") or "tile",
+        features=features,
+    )
+    return build_retrieval_evidence(
+        evidence_ref=hit.get("doc_id") or "",
+        rank=rank,
+        score=hit.get("score"),
+        method="clip_vector",
+        matched_fields=["caption", "objects"],
+        payload=payload,
+    )
+
+
+def adapt_remote_sensing_result(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [adapt_remote_sensing_hit(hit, rank=index) for index, hit in enumerate(hits, start=1)]
+
+
+# ---------------------------------------------------------------------------
+# §v1.1 surveillance（视频监控,片段 + 行为识别）
+# ---------------------------------------------------------------------------
+
+
+def adapt_surveillance_hit(
+    hit: dict[str, Any],
+    *,
+    rank: int | None = None,
+    source_id: str = "surveillance_index",
+) -> dict[str, Any]:
+    """surveillance 命中映射。预期字段:``doc_id`` / ``caption`` / ``objects`` /
+    ``bbox`` / ``clip_start`` / ``clip_end`` / ``behavior`` / ``camera_id`` /
+    ``video_uri``。
+
+    视频监控**默认 PII 敏感**;``sensitivity_level=pii_masked`` /
+    ``access_policy=restricted`` 由 adapter 兜底,各 skill 不应擅自降级。
+    """
+    features = {
+        key: hit[key]
+        for key in ("objects", "bbox", "clip_start", "clip_end", "behavior",
+                    "camera_id", "video_uri")
+        if hit.get(key) is not None
+    }
+
+    geo: dict[str, Any] = {}
+    if hit.get("city"):
+        geo["city"] = hit["city"]
+    if hit.get("camera_lat") is not None:
+        geo["lat"] = hit["camera_lat"]
+    if hit.get("camera_lon") is not None:
+        geo["lon"] = hit["camera_lon"]
+    if hit.get("landmark"):
+        geo["landmark"] = hit["landmark"]
+
+    time_range = None
+    if hit.get("clip_start") and hit.get("clip_end"):
+        time_range = {
+            "mode": "absolute",
+            "start": hit["clip_start"],
+            "end": hit["clip_end"],
+            "timezone": hit.get("timezone") or "Asia/Shanghai",
+        }
+
+    payload = build_evidence_unit(
+        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        data_type="surveillance",
+        text=_first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary")),
+        source_id=hit.get("source_id") or source_id,
+        source_path=hit.get("source_path") or hit.get("video_uri") or None,
+        time_range=time_range,
+        geo_scope=geo,
+        granularity=hit.get("granularity") or "clip",
+        sensitivity_level=hit.get("sensitivity_level") or "pii_masked",
+        access_policy=hit.get("access_policy") or "restricted",
+        features=features,
+    )
+    return build_retrieval_evidence(
+        evidence_ref=hit.get("doc_id") or "",
+        rank=rank,
+        score=hit.get("score"),
+        method="clip_vector_temporal",
+        matched_fields=["caption", "behavior"],
+        payload=payload,
+    )
+
+
+def adapt_surveillance_result(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [adapt_surveillance_hit(hit, rank=index) for index, hit in enumerate(hits, start=1)]
