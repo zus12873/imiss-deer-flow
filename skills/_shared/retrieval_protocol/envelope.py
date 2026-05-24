@@ -53,6 +53,33 @@ def build_retrieval_params(
     return {"strategy": strategy, "rerank": bool(rerank), "score_threshold": score_threshold}
 
 
+def build_budget(
+    *,
+    max_evidence_count: int | None = None,
+    max_token_estimate: int | None = None,
+) -> dict[str, Any]:
+    """schema v1.1：``Envelope.budget``（可选）。
+
+    Planner 在并行调多个 retrieve 时,通过本字段提前声明本次检索的硬上限,
+    各 RAG 必须**尊重**预算 —— 在内部排序后只回 ``max_evidence_count`` 条,
+    并按 ``max_token_estimate`` 截断 text/summary 长度,避免撑爆上下文。
+
+    两个字段都可单独给出;至少必须给出一个,否则不构造 budget 对象。
+    """
+    budget: dict[str, Any] = {}
+    if max_evidence_count is not None:
+        if not isinstance(max_evidence_count, int) or isinstance(max_evidence_count, bool) or max_evidence_count <= 0:
+            raise ValueError("max_evidence_count must be a positive integer")
+        budget["max_evidence_count"] = max_evidence_count
+    if max_token_estimate is not None:
+        if not isinstance(max_token_estimate, int) or isinstance(max_token_estimate, bool) or max_token_estimate <= 0:
+            raise ValueError("max_token_estimate must be a positive integer")
+        budget["max_token_estimate"] = max_token_estimate
+    if not budget:
+        raise ValueError("budget requires at least one of max_evidence_count/max_token_estimate")
+    return budget
+
+
 def build_data_source(
     *,
     source_id: str,
@@ -121,6 +148,7 @@ def build_input_envelope(
     filters: dict[str, Any] | None = None,
     data_sources: list[dict[str, Any]] | None = None,
     context: dict[str, Any] | None = None,
+    budget: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """task.md §3.1：完整 Input Envelope。
 
@@ -129,6 +157,9 @@ def build_input_envelope(
 
     ``data_type`` 是数据类型标签（用于结果分桶 / 校验），**不是路由键** —— 路由仍走
     SkillRouter 的 ``scenes`` + ``task_types``（task.md §7 规则 10）。
+
+    schema v1.1 起新增可选顶层 ``budget`` —— Planner 主动声明的预算上限,
+    各 retrieve 必须尊重(见 :func:`build_budget`)。
     """
     if data_type not in DATA_TYPES:
         raise ValueError(f"unregistered data_type {data_type!r} (task.md §2)")
@@ -144,7 +175,7 @@ def build_input_envelope(
     if retrieval is not None:
         parameters["retrieval"] = retrieval
 
-    return {
+    envelope: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "request_id": request_id or new_request_id(),
         "skill_name": skill_name,
@@ -157,3 +188,8 @@ def build_input_envelope(
             "context": context if context is not None else {},
         },
     }
+    if budget is not None:
+        if not isinstance(budget, dict) or not budget:
+            raise ValueError("budget must be a non-empty dict; use build_budget() to construct it")
+        envelope["budget"] = dict(budget)
+    return envelope

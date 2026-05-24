@@ -61,7 +61,7 @@ class TestEvidenceUnit(unittest.TestCase):
                 "anomaly_flag": True,
             },
         )
-        self.assertEqual(unit["schema_version"], "1.0")
+        self.assertEqual(unit["schema_version"], "1.1")
         self.assertEqual(unit["evidence_id"], "traj_ev_20120601_0700_beijing_wx4g0")
         self.assertEqual(unit["data_type"], "spatiotemporal_trajectory")
         self.assertEqual(unit["meta"]["source_id"], "citybench_checkins_beijing")
@@ -180,7 +180,7 @@ class TestSkillResult(unittest.TestCase):
             summary=evidence.build_summary(title="t", overview="o"),
             evidence=[wrapper],
         )
-        self.assertEqual(result["schema_version"], "1.0")
+        self.assertEqual(result["schema_version"], "1.1")
         self.assertEqual(result["status"], "success")
         self.assertEqual(uuid.UUID(result["request_id"]).version, 4)
         self.assertEqual(list(result["result"]), ["summary", "findings", "evidence", "artifacts"])

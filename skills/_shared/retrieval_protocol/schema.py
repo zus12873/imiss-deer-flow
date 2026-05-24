@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 # task.md §3 / §4：协议版本号。
-SCHEMA_VERSION = "1.0"
+# 1.1 —— 增补 Envelope.budget（max_evidence_count / max_token_estimate）与
+#        SkillResult.errors[] 标准化错误码、status="partial"/"error" 时必填。
+SCHEMA_VERSION = "1.1"
 
 # task.md §2：数据类型分组。分组只为复用召回逻辑，与 SkillRouter 的 scenes 无关。
 #   structured —— 结构化 / 表格
