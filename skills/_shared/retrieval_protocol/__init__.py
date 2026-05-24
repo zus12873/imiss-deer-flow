@@ -17,15 +17,28 @@
 from .adapters import (
     adapt_citybench_hit,
     adapt_citybench_result,
+    adapt_code_hit,
+    adapt_code_result,
     adapt_network_traffic_hit,
     adapt_network_traffic_result,
     adapt_policy_hit,
     adapt_policy_result,
+    adapt_remote_sensing_hit,
+    adapt_remote_sensing_result,
     adapt_road_traffic_hit,
     adapt_road_traffic_result,
+    adapt_streetview_hit,
+    adapt_streetview_result,
+    adapt_surveillance_hit,
+    adapt_surveillance_result,
+    adapt_telecom_hit,
+    adapt_telecom_result,
+    adapt_traffic_flow_hit,
+    adapt_traffic_flow_result,
     build_network_traffic_skill_result,
 )
 from .envelope import (
+    build_budget,
     build_data_source,
     build_filters,
     build_input_envelope,
@@ -33,6 +46,25 @@ from .envelope import (
     build_time_range_absolute,
     build_time_range_relative,
     new_request_id,
+)
+from .errors import (
+    ERROR_ACTIONS,
+    ERROR_CODES,
+    ERROR_STATUSES,
+    STATUS_ERROR,
+    STATUS_PARTIAL,
+    STATUS_SUCCESS,
+    build_error,
+    derive_status,
+    validate_error,
+    validate_errors_block,
+)
+from .middleware import (
+    JsonlSink,
+    LRUCache,
+    RetrievalMiddleware,
+    compute_cache_key,
+    summarize_sensitivity,
 )
 from .evidence import (
     build_artifact,
@@ -61,6 +93,7 @@ from .schema import (
 )
 from .validate import (
     is_valid_evidence,
+    validate_budget,
     validate_evidence,
     validate_evidence_list,
     validate_evidence_unit,
@@ -84,7 +117,8 @@ __all__ = [
     "TIME_RANGE_MODES",
     "data_type_group",
     "is_registered_data_type",
-    # envelope —— task.md §3
+    # envelope —— task.md §3 + v1.1 budget
+    "build_budget",
     "build_data_source",
     "build_filters",
     "build_input_envelope",
@@ -92,6 +126,23 @@ __all__ = [
     "build_time_range_absolute",
     "build_time_range_relative",
     "new_request_id",
+    # errors —— schema v1.1
+    "ERROR_ACTIONS",
+    "ERROR_CODES",
+    "ERROR_STATUSES",
+    "STATUS_ERROR",
+    "STATUS_PARTIAL",
+    "STATUS_SUCCESS",
+    "build_error",
+    "derive_status",
+    "validate_error",
+    "validate_errors_block",
+    # middleware —— schema v1.1(三件套:缓存/日志/审计)
+    "JsonlSink",
+    "LRUCache",
+    "RetrievalMiddleware",
+    "compute_cache_key",
+    "summarize_sensitivity",
     # evidence —— task.md §4
     "build_artifact",
     "build_evidence_unit",
@@ -102,8 +153,9 @@ __all__ = [
     "build_retrieval_evidence",
     "build_skill_result",
     "build_summary",
-    # validate —— task.md §7
+    # validate —— task.md §7 + v1.1
     "is_valid_evidence",
+    "validate_budget",
     "validate_evidence",
     "validate_evidence_list",
     "validate_evidence_unit",
@@ -111,14 +163,26 @@ __all__ = [
     "validate_jsonl_lines",
     "validate_skill_result",
     "validate_time_range",
-    # adapters —— task.md §6
+    # adapters —— task.md §6 + v1.1 六类
     "adapt_citybench_hit",
     "adapt_citybench_result",
+    "adapt_code_hit",
+    "adapt_code_result",
     "adapt_network_traffic_hit",
     "adapt_network_traffic_result",
     "adapt_policy_hit",
     "adapt_policy_result",
+    "adapt_remote_sensing_hit",
+    "adapt_remote_sensing_result",
     "adapt_road_traffic_hit",
     "adapt_road_traffic_result",
+    "adapt_streetview_hit",
+    "adapt_streetview_result",
+    "adapt_surveillance_hit",
+    "adapt_surveillance_result",
+    "adapt_telecom_hit",
+    "adapt_telecom_result",
+    "adapt_traffic_flow_hit",
+    "adapt_traffic_flow_result",
     "build_network_traffic_skill_result",
 ]

@@ -12,11 +12,24 @@ Envelope**（task.md §3），把检索结果统一成 **SkillResult**（task.md
 | 文件 | 对应 task.md | 内容 |
 |---|---|---|
 | `schema.py` | §2 / §4.4 | `DATA_TYPES`（10 类登记取值）、`FEATURES_REGISTRY`、各类枚举 |
-| `envelope.py` | §3 | Input Envelope 构造器 |
+| `envelope.py` | §3 | Input Envelope 构造器 + v1.1 `build_budget` |
 | `evidence.py` | §4 | `evidence_unit` / evidence wrapper / SkillResult 构造器 |
-| `validate.py` | §7 | 融合前十条校验规则 |
-| `adapters.py` | §6 | citybench / network-traffic / road-traffic / policy 兼容映射 |
-| `tests/` | §7 测试清单 | `unittest` 用例，零依赖运行 |
+| `errors.py` | v1.1 §4 errors | 标准化错误码、建议处理动作、status 联动校验 |
+| `validate.py` | §7 + v1.1 | 融合前十条校验规则 + budget / errors 校验 |
+| `adapters.py` | §6 + v1.1 | citybench / network-traffic / road-traffic / policy + 6 类新增 adapter |
+| `middleware.py` | v1.1 | 统一检索中间件:LRU+TTL 缓存 / JSONL 日志 / 审计留痕 |
+| `tests/` | §7 测试清单 | `unittest` 用例,零依赖运行(182 测试) |
+
+## schema v1.1 新增
+
+- **`Envelope.budget`**(可选顶层字段):Planner 主动声明 `max_evidence_count` /
+  `max_token_estimate`,各 retrieve 必须尊重,避免并行调用撑爆 32k 上下文。
+- **`SkillResult.errors[]` 标准化**:每条 error 必须含 `code` / `message` /
+  `action` / `retryable`;status="success" 禁带 errors,"partial"/"error" 必带至少一条。
+- **6 类新增 adapter**:`traffic_flow` / `telecom` / `code` / `streetview` /
+  `remote_sensing` / `surveillance`;电话、视频默认按 PII 敏感标注。
+- **统一检索中间件**:DeerFlow 在各 retrieve 出口加一层,一次性实现缓存、监控
+  日志、合规审计;`RetrievalMiddleware.call(envelope, retrieve_fn=...)`。
 
 ## 快速上手
 
@@ -110,16 +123,78 @@ if not is_valid_evidence(wrapper):
 
 ```python
 from retrieval_protocol import (
+    # task.md §6 原始 4 类
     adapt_citybench_result,        # §6.1 时空轨迹（source 零改动直通）
     adapt_network_traffic_result,  # §6.2 网络流量（薄映射，相对时间）
     adapt_road_traffic_result,     # §6.3 交通流量年报 RAG（gazetteer）
     adapt_policy_result,           # §6.4 政策法规 RAG（policy）
     build_network_traffic_skill_result,  # network-traffic 整份结果 → SkillResult
+    # schema v1.1 新增 6 类
+    adapt_traffic_flow_result,     # 交通流量(结构化 + 时空)
+    adapt_telecom_result,          # 电话网络(PII 敏感,默认 pii_masked)
+    adapt_code_result,             # 代码片段(text + locator file_path/line)
+    adapt_streetview_result,       # 街景图像(image + bbox + objects)
+    adapt_remote_sensing_result,   # 卫星遥感(tile_id + change_score)
+    adapt_surveillance_result,     # 视频监控(clip_start/end + behavior,默认 pii_masked)
 )
 
 wrappers = adapt_network_traffic_result(rag_search_result["hits"])
 skill_result = build_network_traffic_skill_result(rag_search_result)
 ```
+
+## v1.1 统一检索中间件
+
+DeerFlow 在每个 retrieve 调用出口包一层,实现缓存 / 日志 / 审计三件套:
+
+```python
+from retrieval_protocol import (
+    RetrievalMiddleware, LRUCache, JsonlSink,
+)
+
+mw = RetrievalMiddleware(
+    cache=LRUCache(max_entries=1024, ttl_seconds=600),
+    log_sink=JsonlSink("logs/retrieval.jsonl"),
+    audit_sink=my_compliance_sink,   # 合规组实现的钩子
+)
+result = mw.call(envelope, retrieve_fn=my_rag_search, user_id="zhangsan")
+```
+
+- **缓存键**:由 envelope 的 `skill_name + scenario + parameters + filters + budget`
+  推导;**忽略** `request_id`,所以同语义重复调用必命中。
+- **缓存策略**:只缓存 `status="success"/"partial"`,错误结果不入缓存。
+- **日志字段**:`ts / request_id / skill_name / scenario / query_hash / cache_hit /
+  latency_ms / hit_count / status`,一行 JSON。
+- **审计字段**:`user_id / sensitivity_distribution / sensitive_hit_count / filters`,
+  字段表与合规组对齐;sink 异常不阻塞主路径。
+
+## v1.1 标准化错误码
+
+```python
+from retrieval_protocol import build_error, derive_status, build_skill_result
+
+err = build_error(code="E_INDEX_MISSING", message="netflow_demo_v3 索引未构建")
+# action 自动填 "degrade_to_local",retryable=False
+
+sr = build_skill_result(
+    ..., status=derive_status([err]),  # "error"
+    evidence=[], errors=[err],
+)
+```
+
+错误码与缺省 action 表:
+
+| code | 缺省 action | 场景 |
+|---|---|---|
+| `E_TIMEOUT` | `retry_with_backoff` | 请求超时 |
+| `E_RATE_LIMIT` | `retry_with_backoff` | 触发限流 |
+| `E_UPSTREAM_FAIL` | `retry_with_backoff` | 上游 ES/Milvus 报错 |
+| `E_INDEX_MISSING` | `degrade_to_local` | 索引未构建 |
+| `E_BAD_QUERY` | `report_to_user` | query 为空/语法错误 |
+| `E_UNSUPPORTED_FILTER` | `report_to_user` | filter 字段不支持 |
+| `E_OUT_OF_BUDGET` | `report_to_user` | 超 budget 已截断 |
+| `E_PARTIAL_RESULT` | `report_to_user` | 仅返回部分桶/分片 |
+| `E_PERMISSION_DENIED` | `abort` | 鉴权/合规拒绝 |
+| `E_INTERNAL` | `abort` | 协议库内部断言失败 |
 
 ## 在检索 skill 中接入
 
