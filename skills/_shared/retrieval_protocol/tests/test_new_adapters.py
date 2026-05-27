@@ -49,19 +49,31 @@ class TestTrafficFlow(unittest.TestCase):
 
 
 class TestTelecom(unittest.TestCase):
-    def test_pii_defaults(self):
-        w = adapters.adapt_telecom_hit({
-            "doc_id": "tc-001",
-            "summary": "用户 X 与社区 12 联系最密",
-            "call_count": 32,
-            "community_id": 12,
-            "score": 0.78,
+    def test_default_with_hashed_id(self):
+        wrapper = adapters.adapt_telecom_hit({
+            "doc_id": "tc1", "summary": "user a3f5 in community_42",
+            "community_id": "42",
         })
-        payload = w["payload"]
-        # 电话数据默认 PII 敏感。
+        payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
+        self.assertEqual(payload["meta"]["access_policy"], "internal_only")
+
+    def test_upgrade_on_plain_phone(self):
+        wrapper = adapters.adapt_telecom_hit({
+            "doc_id": "tc2", "summary": "号码 13800138000 通话",
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
         self.assertEqual(payload["meta"]["access_policy"], "restricted")
-        _assert_valid(self, w)
+
+    def test_downgrade_on_aggregated_safe(self):
+        wrapper = adapters.adapt_telecom_hit({
+            "doc_id": "tc3", "summary": "区间通话量统计",
+            "call_count": 1200, "unique_contacts": 25,
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "aggregated_safe")
+        self.assertEqual(payload["meta"]["access_policy"], "open")
 
     def test_geo_scope_is_object(self):
         w = adapters.adapt_telecom_hit({
@@ -133,28 +145,23 @@ class TestRemoteSensing(unittest.TestCase):
 
 
 class TestSurveillance(unittest.TestCase):
-    def test_clip_and_pii_defaults(self):
-        w = adapters.adapt_surveillance_hit({
-            "doc_id": "sv-cam-001",
-            "caption": "摄像头 A01 检出聚集事件",
-            "objects": ["pedestrian"],
-            "clip_start": "2024-03-01T20:15:00+08:00",
-            "clip_end": "2024-03-01T20:15:30+08:00",
-            "behavior": "gathering",
-            "camera_id": "A01",
-            "video_uri": "s3://surveillance/A01-20240301-2015.mp4",
-            "city": "Shanghai",
-            "camera_lat": 31.23, "camera_lon": 121.50,
-            "score": 0.93,
+    def test_default_restricted(self):
+        wrapper = adapters.adapt_surveillance_hit({
+            "doc_id": "sv1", "summary": "frame summary",
+            "stream_url": "rtsp://10.0.0.1/cam",
         })
-        _assert_valid(self, w)
-        payload = w["payload"]
-        self.assertEqual(payload["data_type"], "surveillance")
-        # 视频监控默认 PII 敏感。
-        self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
         self.assertEqual(payload["meta"]["access_policy"], "restricted")
-        self.assertEqual(payload["meta"]["time_range"]["mode"], "absolute")
-        self.assertEqual(payload["meta"]["features"]["behavior"], "gathering")
+
+    def test_downgrade_when_masked_no_link(self):
+        wrapper = adapters.adapt_surveillance_hit({
+            "doc_id": "sv2", "summary": "blurred crowd",
+            "objects": [{"label": "face", "masked": True}],
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
+        self.assertEqual(payload["meta"]["access_policy"], "internal_only")
 
 
 class TestBatchAdapters(unittest.TestCase):
@@ -176,6 +183,96 @@ class TestBatchAdapters(unittest.TestCase):
             fn = getattr(adapters, fn_name)
             self.assertTrue(callable(fn), fn_name)
             self.assertEqual(fn([]), [])
+
+
+class TestRoadTrafficGazetteerSensitivity(unittest.TestCase):
+    def test_default_aggregated_safe(self):
+        from retrieval_protocol import adapt_road_traffic_hit
+        wrapper = adapt_road_traffic_hit({
+            "section_path": "第二章 道路概况", "pages": "12-13",
+            "preview": "2024 年全市道路总里程 X 公里", "unique_targets": 50,
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "aggregated_safe")
+        self.assertEqual(payload["meta"]["access_policy"], "open")
+
+    def test_public_downgrade_to_open(self):
+        from retrieval_protocol import adapt_road_traffic_hit
+        wrapper = adapt_road_traffic_hit({
+            "section_path": "公开年鉴", "pages": "1",
+            "preview": "公开年鉴第三章", "source_kind": "public",
+            "unique_targets": 50,
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "open")
+        self.assertEqual(payload["meta"]["access_policy"], "open")
+
+
+class TestCodeSensitivity(unittest.TestCase):
+    def test_default_pii_masked(self):
+        from retrieval_protocol import adapt_code_hit
+        wrapper = adapt_code_hit({
+            "doc_id": "c1", "snippet": "def add(a, b): return a + b",
+            "lang": "python", "file_path": "/srv/repo/x.py",
+            "line_start": 1, "line_end": 1,
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
+        self.assertEqual(payload["meta"]["access_policy"], "internal_only")
+
+    def test_secret_upgrade(self):
+        from retrieval_protocol import adapt_code_hit
+        wrapper = adapt_code_hit({
+            "doc_id": "c2", "snippet": 'API_KEY = "sk_live_xxxxx"',
+            "lang": "python", "file_path": "/srv/repo/x.py",
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
+        self.assertEqual(payload["meta"]["access_policy"], "restricted")
+
+
+class TestStreetviewSensitivity(unittest.TestCase):
+    def test_unmasked_face_upgrade(self):
+        from retrieval_protocol import adapt_streetview_hit
+        wrapper = adapt_streetview_hit({
+            "doc_id": "sv1", "summary": "frame",
+            "objects": [{"label": "face", "masked": False}],
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
+        self.assertEqual(payload["meta"]["access_policy"], "restricted")
+
+    def test_masked_default_pii(self):
+        from retrieval_protocol import adapt_streetview_hit
+        wrapper = adapt_streetview_hit({
+            "doc_id": "sv2", "summary": "frame",
+            "objects": [{"label": "face", "masked": True}],
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
+        self.assertEqual(payload["meta"]["access_policy"], "internal_only")
+
+
+class TestRemoteSensingSensitivity(unittest.TestCase):
+    def test_default_aggregated_safe(self):
+        from retrieval_protocol import adapt_remote_sensing_hit
+        wrapper = adapt_remote_sensing_hit({
+            "doc_id": "r1", "summary": "tile change",
+            "tile_id": "T50T", "change_score": 0.12,
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "aggregated_safe")
+        self.assertEqual(payload["meta"]["access_policy"], "open")
+
+    def test_precise_geo_upgrade(self):
+        from retrieval_protocol import adapt_remote_sensing_hit
+        wrapper = adapt_remote_sensing_hit({
+            "doc_id": "r2",
+            "summary": "点位 39.908823,116.397470 变化",
+        })
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
+        self.assertEqual(payload["meta"]["access_policy"], "restricted")
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from .evidence import (
     build_skill_result,
     build_summary,
 )
+from .sensitivity_rules import classify_sensitivity
 
 # build_rag_docs.py 的 relative_hour_bucket 用 3600s 的小时桶；t+<n>s 标签据此还原。
 _RELATIVE_BUCKET_RE = re.compile(r"^t\+(\d+(?:\.\d+)?)s$")
@@ -201,12 +202,29 @@ def adapt_road_traffic_hit(
     ``preview → text``、``section_path + pages → meta.locator``、
     ``distance / rerank_score → evidence wrapper.retrieval.raw_scores``、
     ``data_type = "gazetteer"``。
+
+    spec 2026-05-27 §3：``sensitivity_level`` / ``access_policy`` 由
+    :func:`classify_sensitivity` 按字段内容预标。
     """
     raw_scores: dict[str, Any] = {}
     if hit.get("distance") is not None:
         raw_scores["distance"] = hit["distance"]
     if hit.get("rerank_score") is not None:
         raw_scores["rerank_score"] = hit["rerank_score"]
+
+    features = {
+        key: hit[key]
+        for key in (
+            "section_path", "pages", "year", "region", "metric_name",
+            "value", "unit", "source_kind", "public", "unique_targets",
+        )
+        if hit.get(key) is not None
+    }
+    classify_unit = {
+        "text": _first_nonempty(hit.get("preview"), hit.get("text"), hit.get("section_path")),
+        "features": features,
+    }
+    level, policy = classify_sensitivity(data_type="gazetteer", evidence_unit=classify_unit)
 
     payload = build_evidence_unit(
         evidence_id=_road_traffic_evidence_id(hit),
@@ -216,11 +234,9 @@ def adapt_road_traffic_hit(
         source_path=hit.get("source_path") or None,
         granularity="paragraph",
         locator=build_locator(section=hit.get("section_path"), page=hit.get("pages")),
-        features={
-            key: hit[key]
-            for key in ("section_path", "pages", "year", "region", "metric_name", "value", "unit")
-            if hit.get(key) is not None
-        },
+        sensitivity_level=level,
+        access_policy=policy,
+        features=features,
     )
     return build_retrieval_evidence(
         evidence_ref=_road_traffic_evidence_id(hit),
@@ -383,11 +399,14 @@ def adapt_telecom_hit(
     """telecom CDR 命中映射。预期字段:``doc_id`` / ``summary`` / ``call_count`` /
     ``unique_contacts`` / ``community_id`` / ``duration_sum``。
 
-    电话数据**强 PII**,默认按 ``sensitivity_level=pii_masked`` /
-    ``access_policy=restricted`` 标注,各 skill 不要降级。
+    spec 2026-05-27 §3:级别由 :func:`classify_sensitivity` 按字段内容预标。
     """
-    feature_keys = ("call_count", "unique_contacts", "community_id",
-                    "duration_sum", "anomaly_flag")
+    feature_keys = (
+        "call_count", "unique_contacts", "community_id", "duration_sum",
+        "anomaly_flag", "purefraud_flag", "mutation_flag", "risk_label", "case_priority",
+        "target_id", "object_id", "cell_id", "station_id",
+        "roaming_place", "timestamp", "time_start", "source_kind", "public",
+    )
     features = {key: hit[key] for key in feature_keys if hit.get(key) is not None}
 
     time_range = None
@@ -399,17 +418,23 @@ def adapt_telecom_hit(
             "timezone": hit.get("timezone") or "Asia/Shanghai",
         }
 
+    text = _first_nonempty(hit.get("summary"), hit.get("text"), hit.get("title"))
+    level, policy = classify_sensitivity(
+        data_type="telecom",
+        evidence_unit={"text": text, "features": features},
+    )
+
     payload = build_evidence_unit(
         evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
         data_type="telecom",
-        text=_first_nonempty(hit.get("summary"), hit.get("text"), hit.get("title")),
+        text=text,
         source_id=hit.get("source_id") or source_id,
         source_path=hit.get("source_path") or None,
         time_range=time_range,
         geo_scope={},  # 通联本身无空间属性;若上层做了基站聚合,在 features 里给 cell_id。
         granularity=hit.get("granularity") or "user_window",
-        sensitivity_level=hit.get("sensitivity_level") or "pii_masked",
-        access_policy=hit.get("access_policy") or "restricted",
+        sensitivity_level=level,
+        access_policy=policy,
         features=features,
     )
     return build_retrieval_evidence(
@@ -452,7 +477,10 @@ def adapt_code_hit(
     )
     features = {
         key: hit[key]
-        for key in ("doc_id", "snippet", "lang", "ast_node_type", "symbol", "repo")
+        for key in (
+            "doc_id", "snippet", "lang", "ast_node_type", "symbol",
+            "repo", "source_kind", "public",
+        )
         if hit.get(key) is not None
     }
 
@@ -462,15 +490,23 @@ def adapt_code_hit(
     if hit.get("vector_score") is not None:
         raw_scores["vector_score"] = hit["vector_score"]
 
+    text = _first_nonempty(hit.get("snippet"), hit.get("text"), hit.get("summary"))
+    level, policy = classify_sensitivity(
+        data_type="code",
+        evidence_unit={"text": text, "features": features},
+    )
+
     payload = build_evidence_unit(
         evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
         data_type="code",
-        text=_first_nonempty(hit.get("snippet"), hit.get("text"), hit.get("summary")),
+        text=text,
         source_id=hit.get("source_id") or source_id,
         source_path=hit.get("source_path") or hit.get("file_path") or None,
         geo_scope={},  # 代码无空间属性;保持对象。
         granularity=hit.get("granularity") or "snippet",
         locator=locator if locator else None,
+        sensitivity_level=level,
+        access_policy=policy,
         features=features,
     )
     return build_retrieval_evidence(
@@ -507,7 +543,10 @@ def adapt_streetview_hit(
     """
     features = {
         key: hit[key]
-        for key in ("objects", "bbox", "taken_at", "heading", "image_uri")
+        for key in (
+            "objects", "bbox", "taken_at", "heading", "image_uri",
+            "target_count", "category", "source_kind", "public", "unique_targets",
+        )
         if hit.get(key) is not None
     }
 
@@ -530,15 +569,23 @@ def adapt_streetview_hit(
             "timezone": hit.get("timezone") or "Asia/Shanghai",
         }
 
+    text = _first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary"))
+    level, policy = classify_sensitivity(
+        data_type="streetview",
+        evidence_unit={"text": text, "features": features},
+    )
+
     payload = build_evidence_unit(
         evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
         data_type="streetview",
-        text=_first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary")),
+        text=text,
         source_id=hit.get("source_id") or source_id,
         source_path=hit.get("source_path") or hit.get("image_uri") or None,
         time_range=time_range,
         geo_scope=geo,
         granularity=hit.get("granularity") or "image",
+        sensitivity_level=level,
+        access_policy=policy,
         features=features,
     )
     return build_retrieval_evidence(
@@ -571,8 +618,11 @@ def adapt_remote_sensing_hit(
     """
     features = {
         key: hit[key]
-        for key in ("objects", "bbox", "tile_id", "taken_at", "change_score",
-                    "cloud_cover", "image_uri")
+        for key in (
+            "objects", "bbox", "tile_id", "taken_at", "change_score",
+            "cloud_cover", "image_uri", "sensitive_facility", "internal_annotation",
+            "source_kind", "public",
+        )
         if hit.get(key) is not None
     }
 
@@ -593,15 +643,23 @@ def adapt_remote_sensing_hit(
             "timezone": hit.get("timezone") or "Asia/Shanghai",
         }
 
+    text = _first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary"))
+    level, policy = classify_sensitivity(
+        data_type="remote_sensing",
+        evidence_unit={"text": text, "features": features},
+    )
+
     payload = build_evidence_unit(
         evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
         data_type="remote_sensing",
-        text=_first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary")),
+        text=text,
         source_id=hit.get("source_id") or source_id,
         source_path=hit.get("source_path") or hit.get("image_uri") or None,
         time_range=time_range,
         geo_scope=geo,
         granularity=hit.get("granularity") or "tile",
+        sensitivity_level=level,
+        access_policy=policy,
         features=features,
     )
     return build_retrieval_evidence(
@@ -638,8 +696,12 @@ def adapt_surveillance_hit(
     """
     features = {
         key: hit[key]
-        for key in ("objects", "bbox", "clip_start", "clip_end", "behavior",
-                    "camera_id", "video_uri")
+        for key in (
+            "objects", "bbox", "clip_start", "clip_end", "behavior",
+            "camera_id", "video_uri", "stream_url", "playback_url", "channel_id",
+            "camera_location", "target_count", "people_count", "vehicle_count",
+            "unique_targets",
+        )
         if hit.get(key) is not None
     }
 
@@ -662,17 +724,23 @@ def adapt_surveillance_hit(
             "timezone": hit.get("timezone") or "Asia/Shanghai",
         }
 
+    text = _first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary"))
+    level, policy = classify_sensitivity(
+        data_type="surveillance",
+        evidence_unit={"text": text, "features": features},
+    )
+
     payload = build_evidence_unit(
         evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
         data_type="surveillance",
-        text=_first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary")),
+        text=text,
         source_id=hit.get("source_id") or source_id,
         source_path=hit.get("source_path") or hit.get("video_uri") or None,
         time_range=time_range,
         geo_scope=geo,
         granularity=hit.get("granularity") or "clip",
-        sensitivity_level=hit.get("sensitivity_level") or "pii_masked",
-        access_policy=hit.get("access_policy") or "restricted",
+        sensitivity_level=level,
+        access_policy=policy,
         features=features,
     )
     return build_retrieval_evidence(
