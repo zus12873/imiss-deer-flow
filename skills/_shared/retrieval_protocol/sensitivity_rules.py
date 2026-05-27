@@ -269,6 +269,9 @@ _DISPATCH = {
     "surveillance":   _classify_surveillance,
 }
 
+assert _DISPATCH.keys() == DEFAULT_SENSITIVITY.keys(), (
+    f"_DISPATCH keys {set(_DISPATCH)} != DEFAULT_SENSITIVITY keys {set(DEFAULT_SENSITIVITY)}"
+)
 
 __all__ = [
     "DEFAULT_SENSITIVITY",
