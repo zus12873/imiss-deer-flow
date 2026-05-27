@@ -7,6 +7,9 @@ adapter 在构造 evidence_unit 时调用 :func:`classify_sensitivity` 做保守
 
 from __future__ import annotations
 
+import re
+from typing import Any
+
 # spec §3.2.1: 6 类受改 data_type 默认级别表。
 # (gazetteer 由 adapt_road_traffic_hit 输出 —— task.md §6.3 既有实现)
 DEFAULT_SENSITIVITY: dict[str, tuple[str, str]] = {
@@ -18,8 +21,134 @@ DEFAULT_SENSITIVITY: dict[str, tuple[str, str]] = {
     "surveillance":   ("restricted",      "restricted"),
 }
 
+# spec §3.1: 第一阶段 k 阈值 —— 主体数 >= 10 才算安全聚合。
+K_THRESHOLD_AGGREGATED_SAFE: int = 10
+
 # 本次不动的 4 类(保持现有 adapter 硬编码默认):
 # spatiotemporal_trajectory / netflow / policy / traffic_flow
+# 师兄未给 traffic_flow 的升降级规则; 其余 3 类暂沿用 adapters.py 既有默认。
 
-# spec §3.1: 第一阶段 k 阈值 —— 主体数 >= 10 才算安全聚合。
-K_THRESHOLD_AGGREGATED_SAFE = 10
+# 保守正则:命中即视为含明文结构化 ID。宁可误升档,不漏敏感。
+_RE_PHONE   = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+_RE_ID_CARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
+_RE_IMEI    = re.compile(r"(?<!\d)\d{15}(?!\d)")
+_RE_EMAIL   = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_RE_IPV4    = re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
+_RE_LATLON  = re.compile(r"(?<!\d)-?\d{1,3}\.\d{4,}\s*,\s*-?\d{1,3}\.\d{4,}(?!\d)")
+_RE_MAC     = re.compile(r"(?<![\w:])[\dA-Fa-f]{2}(?::[\dA-Fa-f]{2}){5}(?![\w:])")
+
+_STRUCT_ID_PATTERNS = (_RE_PHONE, _RE_ID_CARD, _RE_IMEI, _RE_EMAIL, _RE_IPV4, _RE_LATLON, _RE_MAC)
+
+_RE_SECRET_KV = re.compile(
+    r"(?i)(?:password|passwd|secret|api[_-]?key|access[_-]?token|"
+    r"private[_-]?key|client[_-]?secret)\s*[:=]"
+)
+_RE_DB_URL = re.compile(r"(?i)(?:postgres(?:ql)?|mysql|mongodb|redis)://[^\s]+:[^\s]*@")
+
+_K_SUBJECT_FIELDS = (
+    "unique_users", "unique_contacts", "unique_devices",
+    "unique_targets", "community_size", "sample_count",
+)
+
+_RISK_LABEL_FIELDS = (
+    "risk_label", "purefraud_flag", "mutation_flag", "case_priority",
+)
+
+_STREAMING_FIELDS = ("stream_url", "playback_url", "channel_id", "camera_id")
+
+_OBJECT_TIME_GEO_TRIPLE = (
+    ("target_id", "object_id", "user_id_hash"),
+    ("timestamp", "time_start", "captured_at", "ts"),
+    ("cell_id", "station_id", "geohash", "bbox", "roaming_place"),
+)
+
+
+def _text(unit: dict[str, Any]) -> str:
+    """安全取 text；缺失返回空串。"""
+    value = unit.get("text")
+    return value if isinstance(value, str) else ""
+
+
+def _features(unit: dict[str, Any]) -> dict[str, Any]:
+    """安全取 features；缺失返回空 dict。"""
+    value = unit.get("features")
+    return value if isinstance(value, dict) else {}
+
+
+def _has_struct_id(unit: dict[str, Any]) -> bool:
+    """text 中是否含明文结构化 ID(手机/身份证/IMEI/邮箱/IP/精确经纬度/MAC)。"""
+    text = _text(unit)
+    if not text:
+        return False
+    return any(p.search(text) for p in _STRUCT_ID_PATTERNS)
+
+
+def _has_aggregated_k_ge(unit: dict[str, Any], k: int) -> bool:
+    """features 是否含可表达 k 的主体数字段且 >= k。"""
+    feats = _features(unit)
+    for field in _K_SUBJECT_FIELDS:
+        value = feats.get(field)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= k:
+            return True
+    return False
+
+
+def _has_secret_token(unit: dict[str, Any]) -> bool:
+    """text 中是否含 password / token / api_key / secret / DB 连接串等。"""
+    text = _text(unit)
+    if not text:
+        return False
+    return bool(_RE_SECRET_KV.search(text) or _RE_DB_URL.search(text))
+
+
+def _has_object_time_geo_combo(unit: dict[str, Any]) -> bool:
+    """features 中是否同时给出对象 + 时间 + 位置三元组。"""
+    feats = _features(unit)
+    return all(any(field in feats for field in group) for group in _OBJECT_TIME_GEO_TRIPLE)
+
+
+def _has_risk_label(unit: dict[str, Any]) -> bool:
+    """features 中是否含对象级风险标签。"""
+    feats = _features(unit)
+    return any(field in feats for field in _RISK_LABEL_FIELDS)
+
+
+def _has_streaming_link(unit: dict[str, Any]) -> bool:
+    """features 中是否含视频接入链接 / 通道号 / camera_id。"""
+    feats = _features(unit)
+    return any(feats.get(field) for field in _STREAMING_FIELDS)
+
+
+def _has_unmasked_face_plate(unit: dict[str, Any]) -> bool:
+    """features.objects 中是否含未打码的人脸 / 车牌。
+
+    objects[*] 形如 {"label": "face", "masked": True} 或纯字符串 "face"。
+    未显式 ``masked=True`` 视为未打码(保守原则)。
+    """
+    objects = _features(unit).get("objects")
+    if not isinstance(objects, list):
+        return False
+    targets = {"face", "license_plate"}
+    for obj in objects:
+        if isinstance(obj, dict):
+            label = obj.get("label")
+            masked = obj.get("masked")
+            if label in targets and not masked:
+                return True
+        elif isinstance(obj, str) and obj in targets:
+            return True
+    return False
+
+
+def _marked_public(unit: dict[str, Any]) -> bool:
+    """features 中是否明确标 ``public=True`` 或 ``source_kind="public"``。"""
+    feats = _features(unit)
+    if feats.get("public") is True:
+        return True
+    return feats.get("source_kind") == "public"
+
+
+__all__ = [
+    "DEFAULT_SENSITIVITY",
+    "K_THRESHOLD_AGGREGATED_SAFE",
+]
