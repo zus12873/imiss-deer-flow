@@ -34,5 +34,111 @@ class TestAuditEnums(unittest.TestCase):
         self.assertIn("re_identify_combo_risk", audit.AUDIT_REASON_CODES)
 
 
+class TestBuildEvidenceAction(unittest.TestCase):
+    def test_minimal_valid(self):
+        action = audit.build_evidence_action(
+            evidence_id="ev_1",
+            action="desensitize",
+            action_status="applied",
+            triggered_violation_types=[],
+            risk_locations=[{"field_path": "meta.subject", "risk_type": "phone"}],
+            reason_code="struct_id_detected",
+            sensitivity_before="pii_masked",
+            sensitivity_after="restricted",
+        )
+        self.assertEqual(action["evidence_id"], "ev_1")
+        self.assertEqual(action["action"], "desensitize")
+        self.assertEqual(action["risk_locations"], [{"field_path": "meta.subject", "risk_type": "phone"}])
+
+    def test_unknown_action_rejected(self):
+        with self.assertRaises(ValueError):
+            audit.build_evidence_action(
+                evidence_id="ev_1", action="frobnicate", action_status="applied",
+                triggered_violation_types=[], risk_locations=[],
+                reason_code="struct_id_detected",
+                sensitivity_before="pii_masked", sensitivity_after="restricted",
+            )
+
+    def test_unknown_status_rejected(self):
+        with self.assertRaises(ValueError):
+            audit.build_evidence_action(
+                evidence_id="ev_1", action="allow", action_status="bogus",
+                triggered_violation_types=[], risk_locations=[],
+                reason_code="struct_id_detected",
+                sensitivity_before="open", sensitivity_after="open",
+            )
+
+    def test_unknown_reason_code_rejected(self):
+        with self.assertRaises(ValueError):
+            audit.build_evidence_action(
+                evidence_id="ev_1", action="allow", action_status="applied",
+                triggered_violation_types=[], risk_locations=[],
+                reason_code="not_a_code",
+                sensitivity_before="open", sensitivity_after="open",
+            )
+
+
+class TestValidateEvidenceAction(unittest.TestCase):
+    def test_extra_key_in_risk_location_rejected(self):
+        # spec §4.3 护栏:risk_locations[*] 只允许 field_path + risk_type 两个键
+        action = {
+            "evidence_id": "ev_1", "action": "allow", "action_status": "applied",
+            "triggered_violation_types": [],
+            "risk_locations": [
+                {"field_path": "meta.subject", "risk_type": "phone", "raw": "13800138000"},
+            ],
+            "reason_code": "struct_id_detected",
+            "sensitivity_before": "pii_masked", "sensitivity_after": "restricted",
+        }
+        errors = audit.validate_evidence_action(action)
+        self.assertTrue(errors, "validate_evidence_action 应该报错 risk_locations 含第三键")
+        self.assertTrue(any("risk_locations" in e for e in errors))
+
+    def test_long_string_rejected(self):
+        action = {
+            "evidence_id": "ev_1", "action": "allow", "action_status": "applied",
+            "triggered_violation_types": [],
+            "risk_locations": [{"field_path": "x" * 200, "risk_type": "phone"}],
+            "reason_code": "struct_id_detected",
+            "sensitivity_before": "open", "sensitivity_after": "open",
+        }
+        errors = audit.validate_evidence_action(action)
+        self.assertTrue(errors)
+        self.assertTrue(any("length" in e or "长度" in e for e in errors))
+
+    def test_empty_evidence_id_rejected(self):
+        action = {
+            "evidence_id": "", "action": "allow", "action_status": "applied",
+            "triggered_violation_types": [],
+            "risk_locations": [{"field_path": "meta.x", "risk_type": "phone"}],
+            "reason_code": "struct_id_detected",
+            "sensitivity_before": "open", "sensitivity_after": "open",
+        }
+        errors = audit.validate_evidence_action(action)
+        self.assertTrue(errors)
+        self.assertTrue(any("evidence_id" in e for e in errors))
+
+    def test_unknown_sensitivity_level_rejected(self):
+        action = {
+            "evidence_id": "ev_1", "action": "allow", "action_status": "applied",
+            "triggered_violation_types": [],
+            "risk_locations": [{"field_path": "meta.x", "risk_type": "phone"}],
+            "reason_code": "struct_id_detected",
+            "sensitivity_before": "weird", "sensitivity_after": "open",
+        }
+        errors = audit.validate_evidence_action(action)
+        self.assertTrue(errors)
+
+    def test_valid_returns_empty(self):
+        action = {
+            "evidence_id": "ev_1", "action": "allow", "action_status": "applied",
+            "triggered_violation_types": [],
+            "risk_locations": [{"field_path": "meta.x", "risk_type": "phone"}],
+            "reason_code": "struct_id_detected",
+            "sensitivity_before": "open", "sensitivity_after": "open",
+        }
+        self.assertEqual(audit.validate_evidence_action(action), [])
+
+
 if __name__ == "__main__":
     unittest.main()
