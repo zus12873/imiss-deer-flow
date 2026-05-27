@@ -51,6 +51,14 @@ class TestStructIdDetector(unittest.TestCase):
         unit = {"text": "用户 a3f5c9d2 出现 12 次"}
         self.assertFalse(sr._has_struct_id(unit))
 
+    def test_plain_mac_colon(self):
+        unit = {"text": "MAC 00:1A:2B:3C:4D:5E"}
+        self.assertTrue(sr._has_struct_id(unit))
+
+    def test_plain_mac_dash(self):
+        unit = {"text": "MAC 00-1A-2B-3C-4D-5E"}
+        self.assertTrue(sr._has_struct_id(unit))
+
 
 class TestAggregatedKDetector(unittest.TestCase):
     def test_unique_users_ge_k(self):
@@ -130,6 +138,18 @@ class TestUnmaskedFacePlate(unittest.TestCase):
     def test_license_plate_default_unmasked(self):
         unit = {"features": {"objects": [{"label": "license_plate"}]}}  # 未显式 masked → 视为未打码
         self.assertTrue(sr._has_unmasked_face_plate(unit))
+
+    def test_face_as_string(self):
+        unit = {"features": {"objects": ["face"]}}
+        self.assertTrue(sr._has_unmasked_face_plate(unit))
+
+    def test_license_plate_as_string(self):
+        unit = {"features": {"objects": ["license_plate"]}}
+        self.assertTrue(sr._has_unmasked_face_plate(unit))
+
+    def test_unrelated_string_not_flagged(self):
+        unit = {"features": {"objects": ["tree", "car"]}}
+        self.assertFalse(sr._has_unmasked_face_plate(unit))
 
 
 class TestMarkedPublic(unittest.TestCase):
