@@ -191,10 +191,12 @@ class TestRoadTrafficGazetteerSensitivity(unittest.TestCase):
         wrapper = adapt_road_traffic_hit({
             "section_path": "第二章 道路概况", "pages": "12-13",
             "preview": "2024 年全市道路总里程 X 公里", "unique_targets": 50,
+            "score": 0.85,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "aggregated_safe")
         self.assertEqual(payload["meta"]["access_policy"], "open")
+        _assert_valid(self, wrapper)
 
     def test_public_downgrade_to_open(self):
         from retrieval_protocol import adapt_road_traffic_hit
@@ -202,10 +204,12 @@ class TestRoadTrafficGazetteerSensitivity(unittest.TestCase):
             "section_path": "公开年鉴", "pages": "1",
             "preview": "公开年鉴第三章", "source_kind": "public",
             "unique_targets": 50,
+            "score": 0.85,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "open")
         self.assertEqual(payload["meta"]["access_policy"], "open")
+        _assert_valid(self, wrapper)
 
 
 class TestCodeSensitivity(unittest.TestCase):
@@ -215,20 +219,24 @@ class TestCodeSensitivity(unittest.TestCase):
             "doc_id": "c1", "snippet": "def add(a, b): return a + b",
             "lang": "python", "file_path": "/srv/repo/x.py",
             "line_start": 1, "line_end": 1,
+            "score": 0.80,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
         self.assertEqual(payload["meta"]["access_policy"], "internal_only")
+        _assert_valid(self, wrapper)
 
     def test_secret_upgrade(self):
         from retrieval_protocol import adapt_code_hit
         wrapper = adapt_code_hit({
             "doc_id": "c2", "snippet": 'API_KEY = "sk_live_xxxxx"',
             "lang": "python", "file_path": "/srv/repo/x.py",
+            "score": 0.80,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
         self.assertEqual(payload["meta"]["access_policy"], "restricted")
+        _assert_valid(self, wrapper)
 
 
 class TestStreetviewSensitivity(unittest.TestCase):
@@ -237,20 +245,24 @@ class TestStreetviewSensitivity(unittest.TestCase):
         wrapper = adapt_streetview_hit({
             "doc_id": "sv1", "summary": "frame",
             "objects": [{"label": "face", "masked": False}],
+            "score": 0.80,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
         self.assertEqual(payload["meta"]["access_policy"], "restricted")
+        _assert_valid(self, wrapper)
 
     def test_masked_default_pii(self):
         from retrieval_protocol import adapt_streetview_hit
         wrapper = adapt_streetview_hit({
             "doc_id": "sv2", "summary": "frame",
             "objects": [{"label": "face", "masked": True}],
+            "score": 0.80,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
         self.assertEqual(payload["meta"]["access_policy"], "internal_only")
+        _assert_valid(self, wrapper)
 
 
 class TestRemoteSensingSensitivity(unittest.TestCase):
@@ -259,20 +271,24 @@ class TestRemoteSensingSensitivity(unittest.TestCase):
         wrapper = adapt_remote_sensing_hit({
             "doc_id": "r1", "summary": "tile change",
             "tile_id": "T50T", "change_score": 0.12,
+            "score": 0.80,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "aggregated_safe")
         self.assertEqual(payload["meta"]["access_policy"], "open")
+        _assert_valid(self, wrapper)
 
     def test_precise_geo_upgrade(self):
         from retrieval_protocol import adapt_remote_sensing_hit
         wrapper = adapt_remote_sensing_hit({
             "doc_id": "r2",
             "summary": "点位 39.908823,116.397470 变化",
+            "score": 0.80,
         })
         payload = wrapper["payload"]
         self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
         self.assertEqual(payload["meta"]["access_policy"], "restricted")
+        _assert_valid(self, wrapper)
 
 
 if __name__ == "__main__":
