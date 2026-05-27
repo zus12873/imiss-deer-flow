@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
@@ -185,6 +186,106 @@ class TestSummarizeSensitivity(unittest.TestCase):
         # 第一条 pii_masked,其余无 sensitivity_level 字段 → 视为 open。
         self.assertEqual(counts.get("pii_masked"), 1)
         self.assertEqual(counts.get("open"), 2)
+
+
+class TestExtendedAuditFields(unittest.TestCase):
+    def _envelope_with_data_type(self, data_type: str = "telecom") -> dict:
+        # 构造一个最小合法 envelope,仅供 audit 字段抽取用
+        return {
+            "schema_version": "1.1",
+            "request_id": "rid-1",
+            "skill_name": "test-skill",
+            "scenario": "test-scene",
+            "capability": "evidence_search",
+            "input": {
+                "data_sources": [],
+                "parameters": {"query": "q", "data_type": data_type, "top_k": 5, "mode": "auto"},
+                "filters": {},
+                "context": {},
+            },
+        }
+
+    def test_call_accepts_new_kwargs_backward_compat(self):
+        # 老调用 (无新 kwargs) 仍然能用
+        records = []
+        mw = middleware.RetrievalMiddleware(audit_sink=lambda r: records.append(r))
+        env = self._envelope_with_data_type()
+        result = {"status": "success", "result": {"evidence": []}}
+        mw.call(env, retrieve_fn=lambda e: result)
+        self.assertEqual(len(records), 1)
+
+    def test_audit_record_has_gate_scene_data_type(self):
+        records = []
+        mw = middleware.RetrievalMiddleware(audit_sink=lambda r: records.append(r))
+        env = self._envelope_with_data_type("telecom")
+        result = {"status": "success", "result": {"evidence": []}}
+        mw.call(
+            env, retrieve_fn=lambda e: result,
+            gate="InputGate", scene="self_use",
+            policy_version="2026-05-27.1", detector_version="d-0.3.0",
+        )
+        rec = records[0]
+        self.assertEqual(rec["gate"], "InputGate")
+        self.assertEqual(rec["scene"], "self_use")
+        self.assertEqual(rec["data_type"], "telecom")
+        self.assertEqual(rec["policy_version"], "2026-05-27.1")
+        self.assertEqual(rec["detector_version"], "d-0.3.0")
+
+    def test_audit_record_carries_evidence_actions(self):
+        from retrieval_protocol.audit import build_evidence_action
+        action = build_evidence_action(
+            evidence_id="ev_1", action="filter", action_status="applied",
+            triggered_violation_types=["V_PII_PHONE"],
+            risk_locations=[{"field_path": "meta.subject", "risk_type": "phone"}],
+            reason_code="struct_id_detected",
+            sensitivity_before="pii_masked", sensitivity_after="restricted",
+        )
+        records = []
+        mw = middleware.RetrievalMiddleware(audit_sink=lambda r: records.append(r))
+        env = self._envelope_with_data_type("telecom")
+        result = {"status": "success", "result": {"evidence": []}}
+        mw.call(
+            env, retrieve_fn=lambda e: result,
+            gate="OutputGate", evidence_actions=[action],
+        )
+        self.assertEqual(records[0]["evidence_actions"], [action])
+
+    def test_audit_record_omits_none_fields(self):
+        records = []
+        mw = middleware.RetrievalMiddleware(audit_sink=lambda r: records.append(r))
+        env = self._envelope_with_data_type()
+        result = {"status": "success", "result": {"evidence": []}}
+        mw.call(env, retrieve_fn=lambda e: result)  # 不传新 kwargs
+        rec = records[0]
+        # 新字段缺省应为 None
+        self.assertIsNone(rec.get("gate"))
+        self.assertIsNone(rec.get("scene"))
+        self.assertIsNone(rec.get("policy_version"))
+        self.assertIsNone(rec.get("detector_version"))
+        # data_type 仍应从 envelope 抽取
+        self.assertEqual(rec["data_type"], "telecom")
+        # evidence_actions 缺省空列表
+        self.assertEqual(rec["evidence_actions"], [])
+
+
+class TestJsonlSinkAsAuditSink(unittest.TestCase):
+    def test_jsonl_audit_sink_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit.jsonl"
+            sink = middleware.JsonlSink(path)
+            mw = middleware.RetrievalMiddleware(audit_sink=sink.emit)
+            env = {
+                "schema_version": "1.1", "request_id": "rid", "skill_name": "s",
+                "scenario": "sc", "capability": "evidence_search",
+                "input": {"data_sources": [], "parameters": {"query": "q", "data_type": "telecom", "top_k": 1, "mode": "auto"}, "filters": {}, "context": {}},
+            }
+            mw.call(env, retrieve_fn=lambda e: {"status": "success", "result": {"evidence": []}},
+                    gate="InputGate", scene="self_use")
+            lines = path.read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(lines), 1)
+            row = json.loads(lines[0])
+            self.assertEqual(row["gate"], "InputGate")
+            self.assertEqual(row["data_type"], "telecom")
 
 
 if __name__ == "__main__":

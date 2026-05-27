@@ -198,26 +198,42 @@ class RetrievalMiddleware:
         *,
         retrieve_fn: RetrieveFn,
         user_id: str | None = None,
+        gate: str | None = None,
+        scene: str | None = None,
+        policy_version: str | None = None,
+        detector_version: str | None = None,
+        evidence_actions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """对 ``retrieve_fn(envelope)`` 包一层。
 
-        ``user_id`` 仅用于审计,不参与缓存键计算。
+        ``user_id`` 仅用于审计,不参与缓存键计算。``gate`` / ``scene`` /
+        ``policy_version`` / ``detector_version`` / ``evidence_actions`` 均为
+        可选审计字段(spec 2026-05-27 §4),缺省不写入 audit record。
         """
         cache_key = compute_cache_key(envelope)
         started_at = time.time()
         cached = self._cache.get(cache_key)
         if cached is not None:
             self._emit_log(envelope, cache_key, cached, started_at, cache_hit=True)
-            self._emit_audit(envelope, cached, user_id=user_id, cache_hit=True)
+            self._emit_audit(
+                envelope, cached, user_id=user_id, cache_hit=True,
+                gate=gate, scene=scene,
+                policy_version=policy_version, detector_version=detector_version,
+                evidence_actions=evidence_actions,
+            )
             return cached
 
         result = retrieve_fn(envelope)
-        # 仅缓存成功 / 部分成功的结果,完全错误的不缓存。
         status = result.get("status") if isinstance(result, dict) else None
         if status in ("success", "partial"):
             self._cache.put(cache_key, result)
         self._emit_log(envelope, cache_key, result, started_at, cache_hit=False)
-        self._emit_audit(envelope, result, user_id=user_id, cache_hit=False)
+        self._emit_audit(
+            envelope, result, user_id=user_id, cache_hit=False,
+            gate=gate, scene=scene,
+            policy_version=policy_version, detector_version=detector_version,
+            evidence_actions=evidence_actions,
+        )
         return result
 
     # ----- internals -----
@@ -254,6 +270,11 @@ class RetrievalMiddleware:
         *,
         user_id: str | None,
         cache_hit: bool,
+        gate: str | None = None,
+        scene: str | None = None,
+        policy_version: str | None = None,
+        detector_version: str | None = None,
+        evidence_actions: list[dict[str, Any]] | None = None,
     ) -> None:
         if self._audit is None:
             return
@@ -262,6 +283,9 @@ class RetrievalMiddleware:
         sensitivity = summarize_sensitivity(evidence_list)
         sensitive_hits = sum(
             count for level, count in sensitivity.items() if level in _SENSITIVE_LEVELS
+        )
+        data_type = (
+            ((envelope.get("input") or {}).get("parameters") or {}).get("data_type")
         )
         record = {
             "ts": int(time.time() * 1000),
@@ -273,6 +297,13 @@ class RetrievalMiddleware:
             "sensitivity_distribution": sensitivity,
             "sensitive_hit_count": sensitive_hits,
             "filters": (envelope.get("input", {}) or {}).get("filters", {}),
+            # spec 2026-05-27 §4 新增字段
+            "gate": gate,
+            "scene": scene,
+            "data_type": data_type,
+            "policy_version": policy_version,
+            "detector_version": detector_version,
+            "evidence_actions": list(evidence_actions) if evidence_actions else [],
         }
         try:
             self._audit(record)
