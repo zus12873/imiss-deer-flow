@@ -22,5 +22,129 @@ class TestDefaultTable(unittest.TestCase):
         self.assertEqual(sr.K_THRESHOLD_AGGREGATED_SAFE, 10)
 
 
+class TestStructIdDetector(unittest.TestCase):
+    def test_plain_phone(self):
+        unit = {"text": "客户手机号是 13800138000，注意保密"}
+        self.assertTrue(sr._has_struct_id(unit))
+
+    def test_plain_id_card(self):
+        unit = {"text": "证件号 110101199001011234"}
+        self.assertTrue(sr._has_struct_id(unit))
+
+    def test_plain_imei(self):
+        unit = {"text": "imei: 356938035643809"}
+        self.assertTrue(sr._has_struct_id(unit))
+
+    def test_plain_email(self):
+        unit = {"text": "联系 zhang.san@example.com"}
+        self.assertTrue(sr._has_struct_id(unit))
+
+    def test_plain_ipv4(self):
+        unit = {"text": "源 IP 192.168.10.42"}
+        self.assertTrue(sr._has_struct_id(unit))
+
+    def test_precise_geo(self):
+        unit = {"text": "采集点 39.908823,116.397470"}
+        self.assertTrue(sr._has_struct_id(unit))
+
+    def test_hashed_id_not_flagged(self):
+        unit = {"text": "用户 a3f5c9d2 出现 12 次"}
+        self.assertFalse(sr._has_struct_id(unit))
+
+
+class TestAggregatedKDetector(unittest.TestCase):
+    def test_unique_users_ge_k(self):
+        unit = {"features": {"unique_users": 25}}
+        self.assertTrue(sr._has_aggregated_k_ge(unit, 10))
+
+    def test_unique_contacts_lt_k(self):
+        unit = {"features": {"unique_contacts": 8}}
+        self.assertFalse(sr._has_aggregated_k_ge(unit, 10))
+
+    def test_no_k_signal(self):
+        unit = {"features": {"call_count": 100}}  # call_count 不是主体数
+        self.assertFalse(sr._has_aggregated_k_ge(unit, 10))
+
+
+class TestSecretTokenDetector(unittest.TestCase):
+    def test_api_key(self):
+        unit = {"text": 'API_KEY="sk_live_8eF2..."'}
+        self.assertTrue(sr._has_secret_token(unit))
+
+    def test_password(self):
+        unit = {"text": "password = 'admin123'"}
+        self.assertTrue(sr._has_secret_token(unit))
+
+    def test_db_connection(self):
+        unit = {"text": "postgresql://user:pwd@10.0.0.1:5432/db"}
+        self.assertTrue(sr._has_secret_token(unit))
+
+    def test_normal_code(self):
+        unit = {"text": "def add(a, b): return a + b"}
+        self.assertFalse(sr._has_secret_token(unit))
+
+
+class TestObjectTimeGeoCombo(unittest.TestCase):
+    def test_combo_present(self):
+        unit = {"features": {"target_id": "veh_A", "timestamp": "2026-05-27T08:00:00", "cell_id": "cell_42"}}
+        self.assertTrue(sr._has_object_time_geo_combo(unit))
+
+    def test_missing_geo(self):
+        unit = {"features": {"target_id": "veh_A", "timestamp": "2026-05-27T08:00:00"}}
+        self.assertFalse(sr._has_object_time_geo_combo(unit))
+
+
+class TestRiskLabel(unittest.TestCase):
+    def test_purefraud_flag(self):
+        unit = {"features": {"purefraud_flag": True}}
+        self.assertTrue(sr._has_risk_label(unit))
+
+    def test_no_label(self):
+        unit = {"features": {"call_count": 10}}
+        self.assertFalse(sr._has_risk_label(unit))
+
+
+class TestStreamingLink(unittest.TestCase):
+    def test_stream_url(self):
+        unit = {"features": {"stream_url": "rtsp://10.0.0.1/stream1"}}
+        self.assertTrue(sr._has_streaming_link(unit))
+
+    def test_channel_id(self):
+        unit = {"features": {"channel_id": "cam_42"}}
+        self.assertTrue(sr._has_streaming_link(unit))
+
+    def test_no_link(self):
+        unit = {"features": {"objects": ["person"]}}
+        self.assertFalse(sr._has_streaming_link(unit))
+
+
+class TestUnmaskedFacePlate(unittest.TestCase):
+    def test_unmasked_face(self):
+        unit = {"features": {"objects": [{"label": "face", "masked": False}]}}
+        self.assertTrue(sr._has_unmasked_face_plate(unit))
+
+    def test_masked_face(self):
+        unit = {"features": {"objects": [{"label": "face", "masked": True}]}}
+        self.assertFalse(sr._has_unmasked_face_plate(unit))
+
+    def test_license_plate_default_unmasked(self):
+        unit = {"features": {"objects": [{"label": "license_plate"}]}}  # 未显式 masked → 视为未打码
+        self.assertTrue(sr._has_unmasked_face_plate(unit))
+
+
+class TestMarkedPublic(unittest.TestCase):
+    def test_explicit_public(self):
+        unit = {"features": {"public": True}}
+        self.assertTrue(sr._marked_public(unit))
+
+    def test_source_kind_public(self):
+        unit = {"features": {"source_kind": "public"}}
+        self.assertTrue(sr._marked_public(unit))
+
+    def test_not_public(self):
+        unit = {"features": {"source_kind": "internal"}}
+        self.assertFalse(sr._marked_public(unit))
+
+
 if __name__ == "__main__":
     unittest.main()
