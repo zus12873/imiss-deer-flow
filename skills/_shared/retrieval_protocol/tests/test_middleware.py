@@ -257,14 +257,14 @@ class TestExtendedAuditFields(unittest.TestCase):
         result = {"status": "success", "result": {"evidence": []}}
         mw.call(env, retrieve_fn=lambda e: result)  # 不传新 kwargs
         rec = records[0]
-        # 新字段缺省应为 None
-        self.assertIsNone(rec.get("gate"))
-        self.assertIsNone(rec.get("scene"))
-        self.assertIsNone(rec.get("policy_version"))
-        self.assertIsNone(rec.get("detector_version"))
+        # spec §4.1: 新字段缺省 None 时不写入
+        self.assertNotIn("gate", rec)
+        self.assertNotIn("scene", rec)
+        self.assertNotIn("policy_version", rec)
+        self.assertNotIn("detector_version", rec)
         # data_type 仍应从 envelope 抽取
         self.assertEqual(rec["data_type"], "telecom")
-        # evidence_actions 缺省空列表
+        # evidence_actions 缺省空列表（始终写入）
         self.assertEqual(rec["evidence_actions"], [])
 
 

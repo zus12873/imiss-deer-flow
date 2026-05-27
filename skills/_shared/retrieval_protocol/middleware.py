@@ -287,7 +287,7 @@ class RetrievalMiddleware:
         data_type = (
             ((envelope.get("input") or {}).get("parameters") or {}).get("data_type")
         )
-        record = {
+        record: dict[str, Any] = {
             "ts": int(time.time() * 1000),
             "request_id": envelope.get("request_id"),
             "user_id": user_id,
@@ -297,14 +297,18 @@ class RetrievalMiddleware:
             "sensitivity_distribution": sensitivity,
             "sensitive_hit_count": sensitive_hits,
             "filters": (envelope.get("input", {}) or {}).get("filters", {}),
-            # spec 2026-05-27 §4 新增字段
-            "gate": gate,
-            "scene": scene,
-            "data_type": data_type,
-            "policy_version": policy_version,
-            "detector_version": detector_version,
             "evidence_actions": list(evidence_actions) if evidence_actions else [],
         }
+        # spec 2026-05-27 §4 新增字段:缺省 None 不写入
+        for key, value in (
+            ("gate", gate),
+            ("scene", scene),
+            ("data_type", data_type),
+            ("policy_version", policy_version),
+            ("detector_version", detector_version),
+        ):
+            if value is not None:
+                record[key] = value
         try:
             self._audit(record)
         except Exception:
