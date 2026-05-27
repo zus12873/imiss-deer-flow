@@ -40,7 +40,7 @@ _RE_MAC     = re.compile(r"(?<![\w:\-])[\dA-Fa-f]{2}(?:[:\-][\dA-Fa-f]{2}){5}(?!
 _STRUCT_ID_PATTERNS = (_RE_PHONE, _RE_ID_CARD, _RE_IMEI, _RE_EMAIL, _RE_IPV4, _RE_LATLON, _RE_MAC)
 
 _RE_SECRET_KV = re.compile(
-    r"(?i)(?:password|passwd|secret|api[_-]?key|access[_-]?token|"
+    r"(?i)(?:password|passwd|secret|token|api[_-]?key|access[_-]?token|"
     r"private[_-]?key|client[_-]?secret)\s*[:=]"
 )
 _RE_DB_URL = re.compile(r"(?i)(?:postgres(?:ql)?|mysql|mongodb|redis)://[^\s]+:[^\s]*@")
@@ -148,7 +148,130 @@ def _marked_public(unit: dict[str, Any]) -> bool:
     return feats.get("source_kind") == "public"
 
 
+_RESTRICTED = ("restricted", "restricted")
+_PII = ("pii_masked", "internal_only")
+_AGGREGATED_SAFE = ("aggregated_safe", "open")
+_OPEN = ("open", "open")
+
+
+def classify_sensitivity(
+    *,
+    data_type: str,
+    evidence_unit: dict[str, Any],
+    k_threshold: int = K_THRESHOLD_AGGREGATED_SAFE,
+) -> tuple[str, str]:
+    """按 data_type 与 evidence_unit 字段做保守敏感度预标。
+
+    返回 ``(sensitivity_level, access_policy)``;未登记 data_type 抛 ``ValueError``。
+    判定不确定时升一档(保守原则)。本函数只读 ``evidence_unit``,不修改入参。
+    """
+    if data_type not in DEFAULT_SENSITIVITY:
+        raise ValueError(
+            f"unknown data_type {data_type!r}; expected one of {sorted(DEFAULT_SENSITIVITY)}"
+        )
+    return _DISPATCH[data_type](evidence_unit, k_threshold)
+
+
+def _classify_gazetteer(unit: dict[str, Any], k: int) -> tuple[str, str]:
+    # 升级:小样本(k<10) / 含明文结构化 ID(可定位到具体对象或设施)
+    if _has_struct_id(unit):
+        return _RESTRICTED
+    feats = _features(unit)
+    if any(field in feats for field in _K_SUBJECT_FIELDS) and not _has_aggregated_k_ge(unit, k):
+        return _RESTRICTED
+    # 降级:已公开 且 无敏感信号
+    if _marked_public(unit):
+        return _OPEN
+    return _AGGREGATED_SAFE
+
+
+def _classify_telecom(unit: dict[str, Any], k: int) -> tuple[str, str]:
+    # 升级:明文结构化 ID / 对象+时间+位置组合 / 对象级风险标签
+    if _has_struct_id(unit) or _has_object_time_geo_combo(unit) or _has_risk_label(unit):
+        return _RESTRICTED
+    # 降级:聚合 + k>=10 + 不绑定单对象(_has_object_time_geo_combo 已在升级里挡掉)
+    if _has_aggregated_k_ge(unit, k):
+        return _AGGREGATED_SAFE
+    return _PII
+
+
+def _classify_code(unit: dict[str, Any], k: int) -> tuple[str, str]:
+    # 升级:含密钥 / token / DB 连接串 / 内部 IP(后者由 struct_id IPv4 命中)
+    if _has_secret_token(unit) or _has_struct_id(unit):
+        return _RESTRICTED
+    # 降级:已公开 且 无密钥
+    if _marked_public(unit):
+        return _OPEN
+    return _PII
+
+
+def _classify_streetview(unit: dict[str, Any], k: int) -> tuple[str, str]:
+    # 升级:未打码人脸 / 车牌 / 精确位置(明文经纬度等)
+    if _has_unmasked_face_plate(unit) or _has_struct_id(unit):
+        return _RESTRICTED
+    # 降级:仅目标计数 / 类别统计 + 无可识别对象 + 无精确位置 + k>=10
+    feats = _features(unit)
+    objects = feats.get("objects")
+    only_counts = (
+        ("target_count" in feats or "category" in feats)
+        and (objects is None or objects == [])
+    )
+    if only_counts and _has_aggregated_k_ge(unit, k):
+        return _AGGREGATED_SAFE
+    return _PII
+
+
+def _classify_remote_sensing(unit: dict[str, Any], k: int) -> tuple[str, str]:
+    # 升级:精确坐标 / 内部标注 / 敏感设施点位(由 struct_id LATLON + sensitive_facility 字段)
+    feats = _features(unit)
+    if _has_struct_id(unit) or feats.get("sensitive_facility") or feats.get("internal_annotation"):
+        return _RESTRICTED
+    # 降级:已公开 且 无敏感信号
+    if _marked_public(unit):
+        return _OPEN
+    return _AGGREGATED_SAFE
+
+
+def _classify_surveillance(unit: dict[str, Any], k: int) -> tuple[str, str]:
+    # 默认顶档,只允许两条降级路径
+    feats = _features(unit)
+    objects = feats.get("objects")
+    has_streaming = _has_streaming_link(unit)
+    has_unmasked = _has_unmasked_face_plate(unit)
+    has_specific_location = _has_struct_id(unit) or feats.get("camera_location")
+
+    # 降级 1:打码 + 无 streaming + 无具体点位 → pii_masked+internal_only
+    if (
+        isinstance(objects, list) and objects
+        and not has_unmasked
+        and not has_streaming
+        and not has_specific_location
+    ):
+        return _PII
+
+    # 降级 2:仅聚合统计(人数/车流量/目标数量) + k>=10 + 无 streaming / 未打码
+    only_counts = (
+        ("target_count" in feats or "people_count" in feats or "vehicle_count" in feats)
+        and (objects is None or objects == [])
+    )
+    if only_counts and _has_aggregated_k_ge(unit, k) and not has_streaming and not has_unmasked:
+        return _AGGREGATED_SAFE
+
+    return _RESTRICTED
+
+
+_DISPATCH = {
+    "gazetteer":      _classify_gazetteer,
+    "telecom":        _classify_telecom,
+    "code":           _classify_code,
+    "streetview":     _classify_streetview,
+    "remote_sensing": _classify_remote_sensing,
+    "surveillance":   _classify_surveillance,
+}
+
+
 __all__ = [
     "DEFAULT_SENSITIVITY",
     "K_THRESHOLD_AGGREGATED_SAFE",
+    "classify_sensitivity",
 ]

@@ -166,5 +166,138 @@ class TestMarkedPublic(unittest.TestCase):
         self.assertFalse(sr._marked_public(unit))
 
 
+class TestClassifyGazetteer(unittest.TestCase):
+    def test_default(self):
+        unit = {"text": "2024 年全市道路总里程 X 公里", "features": {"unique_targets": 50}}
+        self.assertEqual(sr.classify_sensitivity(data_type="gazetteer", evidence_unit=unit),
+                         ("aggregated_safe", "open"))
+
+    def test_small_sample_upgrade(self):
+        unit = {"text": "样本社区 5 个的统计", "features": {"unique_targets": 5}}
+        self.assertEqual(sr.classify_sensitivity(data_type="gazetteer", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+    def test_public_downgrade(self):
+        unit = {"text": "公开年鉴第三章", "features": {"source_kind": "public", "unique_targets": 50}}
+        self.assertEqual(sr.classify_sensitivity(data_type="gazetteer", evidence_unit=unit),
+                         ("open", "open"))
+
+
+class TestClassifyTelecom(unittest.TestCase):
+    def test_default_with_hashed_id(self):
+        unit = {"text": "user a3f5 在 community_42", "features": {"community_id": "42"}}
+        self.assertEqual(sr.classify_sensitivity(data_type="telecom", evidence_unit=unit),
+                         ("pii_masked", "internal_only"))
+
+    def test_plain_phone_upgrade(self):
+        unit = {"text": "号码 13800138000 通话", "features": {}}
+        self.assertEqual(sr.classify_sensitivity(data_type="telecom", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+    def test_aggregated_safe_downgrade(self):
+        unit = {"text": "区间通话量统计", "features": {"call_count": 1200, "unique_contacts": 25}}
+        self.assertEqual(sr.classify_sensitivity(data_type="telecom", evidence_unit=unit),
+                         ("aggregated_safe", "open"))
+
+    def test_aggregated_k_below_threshold_keeps_default(self):
+        unit = {"text": "区间通话量统计", "features": {"call_count": 1200, "unique_contacts": 8}}
+        self.assertEqual(sr.classify_sensitivity(data_type="telecom", evidence_unit=unit),
+                         ("pii_masked", "internal_only"))
+
+    def test_risk_label_upgrade(self):
+        unit = {"text": "聚类社区 42", "features": {"community_id": "42", "purefraud_flag": True}}
+        self.assertEqual(sr.classify_sensitivity(data_type="telecom", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+
+class TestClassifyCode(unittest.TestCase):
+    def test_default(self):
+        unit = {"text": "def add(a, b): return a + b", "features": {"lang": "python"}}
+        self.assertEqual(sr.classify_sensitivity(data_type="code", evidence_unit=unit),
+                         ("pii_masked", "internal_only"))
+
+    def test_secret_upgrade(self):
+        unit = {"text": 'API_KEY = "sk_live_xxxxx"', "features": {}}
+        self.assertEqual(sr.classify_sensitivity(data_type="code", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+    def test_public_code_downgrade(self):
+        unit = {"text": "def add(a, b): return a + b", "features": {"source_kind": "public"}}
+        self.assertEqual(sr.classify_sensitivity(data_type="code", evidence_unit=unit),
+                         ("open", "open"))
+
+    def test_public_but_has_token_keeps_restricted(self):
+        unit = {"text": 'token = "abc"', "features": {"source_kind": "public"}}
+        self.assertEqual(sr.classify_sensitivity(data_type="code", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+
+class TestClassifyStreetview(unittest.TestCase):
+    def test_default_masked(self):
+        unit = {"features": {"objects": [{"label": "face", "masked": True}]}}
+        self.assertEqual(sr.classify_sensitivity(data_type="streetview", evidence_unit=unit),
+                         ("pii_masked", "internal_only"))
+
+    def test_unmasked_face_upgrade(self):
+        unit = {"features": {"objects": [{"label": "face", "masked": False}]}}
+        self.assertEqual(sr.classify_sensitivity(data_type="streetview", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+    def test_count_only_downgrade(self):
+        unit = {"features": {"target_count": 30, "unique_targets": 30, "category": "tree"}}
+        self.assertEqual(sr.classify_sensitivity(data_type="streetview", evidence_unit=unit),
+                         ("aggregated_safe", "open"))
+
+    def test_target_count_with_precise_geo_upgrade(self):
+        unit = {"text": "采集点 39.908823,116.397470",
+                "features": {"target_count": 30, "unique_targets": 30}}
+        self.assertEqual(sr.classify_sensitivity(data_type="streetview", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+
+class TestClassifyRemoteSensing(unittest.TestCase):
+    def test_default(self):
+        unit = {"features": {"tile_id": "T50T", "change_score": 0.12}}
+        self.assertEqual(sr.classify_sensitivity(data_type="remote_sensing", evidence_unit=unit),
+                         ("aggregated_safe", "open"))
+
+    def test_precise_geo_upgrade(self):
+        unit = {"text": "点位 39.908823,116.397470 变化"}
+        self.assertEqual(sr.classify_sensitivity(data_type="remote_sensing", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+    def test_public_downgrade(self):
+        unit = {"features": {"tile_id": "T50T", "source_kind": "public"}}
+        self.assertEqual(sr.classify_sensitivity(data_type="remote_sensing", evidence_unit=unit),
+                         ("open", "open"))
+
+
+class TestClassifySurveillance(unittest.TestCase):
+    def test_default(self):
+        unit = {"features": {"stream_url": "rtsp://10.0.0.1/cam"}}
+        self.assertEqual(sr.classify_sensitivity(data_type="surveillance", evidence_unit=unit),
+                         ("restricted", "restricted"))
+
+    def test_masked_no_link_downgrade_pii(self):
+        unit = {"features": {"objects": [{"label": "face", "masked": True}]}}
+        self.assertEqual(sr.classify_sensitivity(data_type="surveillance", evidence_unit=unit),
+                         ("pii_masked", "internal_only"))
+
+    def test_aggregated_only_downgrade_safe(self):
+        unit = {"features": {"target_count": 120, "unique_targets": 80}}
+        self.assertEqual(sr.classify_sensitivity(data_type="surveillance", evidence_unit=unit),
+                         ("aggregated_safe", "open"))
+
+
+class TestClassifyErrors(unittest.TestCase):
+    def test_unregistered_data_type_raises(self):
+        with self.assertRaises(ValueError):
+            sr.classify_sensitivity(data_type="not_a_type", evidence_unit={})
+
+    def test_empty_unit_returns_default(self):
+        self.assertEqual(sr.classify_sensitivity(data_type="telecom", evidence_unit={}),
+                         ("pii_masked", "internal_only"))
+
+
 if __name__ == "__main__":
     unittest.main()
