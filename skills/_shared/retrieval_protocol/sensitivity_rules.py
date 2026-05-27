@@ -35,7 +35,7 @@ _RE_IMEI    = re.compile(r"(?<!\d)\d{15}(?!\d)")
 _RE_EMAIL   = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _RE_IPV4    = re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
 _RE_LATLON  = re.compile(r"(?<!\d)-?\d{1,3}\.\d{4,}\s*,\s*-?\d{1,3}\.\d{4,}(?!\d)")
-_RE_MAC     = re.compile(r"(?<![\w:])[\dA-Fa-f]{2}(?::[\dA-Fa-f]{2}){5}(?![\w:])")
+_RE_MAC     = re.compile(r"(?<![\w:\-])[\dA-Fa-f]{2}(?:[:\-][\dA-Fa-f]{2}){5}(?![\w:\-])")
 
 _STRUCT_ID_PATTERNS = (_RE_PHONE, _RE_ID_CARD, _RE_IMEI, _RE_EMAIL, _RE_IPV4, _RE_LATLON, _RE_MAC)
 
