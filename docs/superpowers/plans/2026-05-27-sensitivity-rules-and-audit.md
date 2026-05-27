@@ -2165,3 +2165,46 @@ git commit -m "docs(plan): 标记 sensitivity-rules-and-audit 完成"
 
 那一轮要动 `backend/packages/harness/deerflow/agents/`，与本次的"协议层 +
 adapter 内部 + audit 字段"完全隔离。
+
+---
+
+## 完成记录
+
+- **完成日期**：2026-05-27
+- **完整测试数**：272
+- **commit 列表**（按时间顺序，从 5a23d34 之后）：
+
+  | commit | 说明 |
+  |---|---|
+  | d04a0d2 | Task 0：锁四档敏感度语义到 schema.py 注释 |
+  | e30535c | Task 1：sensitivity_rules.py 默认级别表 |
+  | 182c895 | Task 2：sensitivity_rules.py 8 个判定基元 |
+  | 033508f | Task 3：classify_sensitivity 6 类分派 |
+  | 6fc8872 | Task 4：加 _DISPATCH 与 DEFAULT_SENSITIVITY 同步断言 |
+  | 71aa6bc | Task 4：6 类 adapter 调用 classify_sensitivity |
+  | d5f69ab | Task 4 review：修复 (text 复用 + docstring + _assert_valid) |
+  | 569887d | Task 5：audit.py 枚举常量 |
+  | 6c8639f | Task 6：audit.py docstring 移除 Task 6 超前引用 |
+  | dc72e55 | Task 6：build/validate_evidence_action + 脱敏护栏 |
+  | b9ba611 | Task 7：middleware audit 字段补全 + 入参扩展 |
+  | 12c8f5d | Task 8 refactor：audit 直接 import schema.SENSITIVITY_LEVELS |
+  | d6f59a4 | Task 8：公开 sensitivity_rules / audit API |
+  | 24c0cdc | Task 9：README 增敏感度落档 + 审计字段章节 |
+  | b3180a4 | Task 10：README 增敏感度落档 + 审计字段章节（末尾补充） |
+
+- **子模块全 OK**：
+  - test_schema ✓
+  - test_envelope ✓
+  - test_evidence ✓
+  - test_errors ✓
+  - test_validate ✓
+  - test_adapters ✓
+  - test_new_adapters ✓
+  - test_middleware ✓
+  - test_budget ✓
+  - test_rag_search_integration ✓
+  - test_sensitivity_rules ✓
+  - test_audit ✓
+  - test_public_api_new ✓
+
+- **未 push**（按规范 3 等师兄确认）
