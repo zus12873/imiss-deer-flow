@@ -1,9 +1,10 @@
-"""审计动作 / 闸门 / 场景 / 原因码登记 + EvidenceAction 构造校验。
+"""审计动作 / 闸门 / 场景 / 原因码枚举常量。
 
 spec 2026-05-27 §4。本模块仅依赖 Python 标准库。
 
-风险值脱敏护栏: ``build_evidence_action`` / ``validate_evidence_action`` 拒绝任何
-含原始敏感值的 ``risk_locations`` —— 审计日志不能成为二次泄露源。
+风险值脱敏护栏意图: 后续 Task 6 的 build_evidence_action / validate_evidence_action
+将拒绝任何含原始敏感值的 risk_locations —— 审计日志不得成为二次泄露源。
+dataclass / Any 已在此预导入供 Task 6 直接使用。
 """
 
 from __future__ import annotations
