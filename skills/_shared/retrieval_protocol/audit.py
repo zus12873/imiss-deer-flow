@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .schema import SENSITIVITY_LEVELS as _SENSITIVITY_LEVELS_AUDIT
+
 # spec §4.2: action 枚举
 AUDIT_ACTIONS: frozenset[str] = frozenset({
     "allow", "warn", "desensitize", "aggregate",
@@ -49,11 +51,6 @@ AUDIT_REASON_CODES: frozenset[str] = frozenset({
 
 _MAX_FIELD_LEN = 128
 _RISK_LOCATION_KEYS = frozenset({"field_path", "risk_type"})
-
-# 与 schema.SENSITIVITY_LEVELS 对齐(避免运行时 import 循环,显式列出)
-_SENSITIVITY_LEVELS_AUDIT: frozenset[str] = frozenset({
-    "open", "aggregated_safe", "pii_masked", "restricted",
-})
 
 
 def build_evidence_action(
