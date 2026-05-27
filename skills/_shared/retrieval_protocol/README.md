@@ -167,6 +167,80 @@ result = mw.call(envelope, retrieve_fn=my_rag_search, user_id="zhangsan")
 - **审计字段**:`user_id / sensitivity_distribution / sensitive_hit_count / filters`,
   字段表与合规组对齐;sink 异常不阻塞主路径。
 
+## 敏感度落档 + 6 类 adapter 预标（spec 2026-05-27 §3）
+
+`adapt_road_traffic_hit` / `adapt_telecom_hit` / `adapt_code_hit` /
+`adapt_streetview_hit` / `adapt_remote_sensing_hit` / `adapt_surveillance_hit`
+在构造 `evidence_unit` 时调用 `classify_sensitivity`，按字段内容做**保守预标**。
+预标只是初始档；最终是否过滤 / 脱敏 / 拒绝，仍由合规检测器统一决策。
+
+```python
+from retrieval_protocol import classify_sensitivity, DEFAULT_SENSITIVITY
+
+level, policy = classify_sensitivity(
+    data_type="telecom",
+    evidence_unit={
+        "text": "号码 13800138000 通话",
+        "features": {},
+    },
+)
+# ("restricted", "restricted") —— 明文手机号触发升档
+```
+
+四档语义见 `schema.py` 中 `SENSITIVITY_LEVELS` 注释；6 类默认级别表见
+`sensitivity_rules.py` 的 `DEFAULT_SENSITIVITY`。**不动**的 4 类
+(`spatiotemporal_trajectory` / `netflow` / `policy` / `traffic_flow`) 保留
+现有 adapter 硬编码默认。
+
+## 审计字段扩展（spec 2026-05-27 §4）
+
+`RetrievalMiddleware.call` 新增可选入参，自动注入到 audit record：
+
+```python
+from retrieval_protocol import (
+    RetrievalMiddleware, JsonlSink,
+    build_evidence_action,
+)
+
+action = build_evidence_action(
+    evidence_id="ev_1", action="filter", action_status="applied",
+    triggered_violation_types=["V_PII_PHONE"],
+    risk_locations=[{"field_path": "meta.subject", "risk_type": "phone"}],
+    reason_code="struct_id_detected",
+    sensitivity_before="pii_masked", sensitivity_after="restricted",
+)
+
+mw = RetrievalMiddleware(
+    audit_sink=JsonlSink("logs/retrieval.audit.jsonl").emit,
+)
+mw.call(
+    envelope,
+    retrieve_fn=my_rag_search,
+    user_id="zhangsan",
+    gate="OutputGate",          # InputGate / ContextGate / OutputGate
+    scene="internal_org",       # self_use / internal_org / cross_org / public_release / research_anon
+    policy_version="2026-05-27.1",
+    detector_version="d-0.3.0",
+    evidence_actions=[action],
+)
+```
+
+audit record 字段：
+
+| 字段 | 类型 | 备注 |
+|---|---|---|
+| `gate` / `scene` | str/None | 闸门 + 场景 |
+| `data_type` | str/None | 从 envelope.input.parameters.data_type 自动抽 |
+| `policy_version` / `detector_version` | str/None | 处置矩阵 / 检测器版本 |
+| `evidence_actions[]` | list | 每条含 evidence_id / action / action_status / triggered_violation_types / risk_locations / reason_code / sensitivity_before / sensitivity_after |
+
+**风险值脱敏护栏**：`build_evidence_action` 拒绝 `risk_locations[*]` 中除
+`field_path` + `risk_type` 之外的任何键、长度 > 128 字符的字符串、空
+`evidence_id` —— 审计日志不能成为二次泄露源。
+
+默认 audit sink 复用 `JsonlSink`（已有日志 sink）。ES 后端只需提供
+`Callable[[dict], None]` 接口写 bulk 即可。
+
 ## v1.1 标准化错误码
 
 ```python
