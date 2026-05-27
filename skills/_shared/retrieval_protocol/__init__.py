@@ -59,6 +59,20 @@ from .errors import (
     validate_error,
     validate_errors_block,
 )
+from .sensitivity_rules import (
+    DEFAULT_SENSITIVITY,
+    K_THRESHOLD_AGGREGATED_SAFE,
+    classify_sensitivity,
+)
+from .audit import (
+    AUDIT_ACTIONS,
+    AUDIT_ACTION_STATUSES,
+    AUDIT_GATES,
+    AUDIT_REASON_CODES,
+    AUDIT_SCENES,
+    build_evidence_action,
+    validate_evidence_action,
+)
 from .middleware import (
     JsonlSink,
     LRUCache,
@@ -137,6 +151,18 @@ __all__ = [
     "derive_status",
     "validate_error",
     "validate_errors_block",
+    # sensitivity_rules —— spec 2026-05-27 §3
+    "DEFAULT_SENSITIVITY",
+    "K_THRESHOLD_AGGREGATED_SAFE",
+    "classify_sensitivity",
+    # audit —— spec 2026-05-27 §4
+    "AUDIT_ACTIONS",
+    "AUDIT_ACTION_STATUSES",
+    "AUDIT_GATES",
+    "AUDIT_REASON_CODES",
+    "AUDIT_SCENES",
+    "build_evidence_action",
+    "validate_evidence_action",
     # middleware —— schema v1.1(三件套:缓存/日志/审计)
     "JsonlSink",
     "LRUCache",
