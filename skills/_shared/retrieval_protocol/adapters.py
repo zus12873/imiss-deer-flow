@@ -220,16 +220,16 @@ def adapt_road_traffic_hit(
         )
         if hit.get(key) is not None
     }
-    classify_unit = {
-        "text": _first_nonempty(hit.get("preview"), hit.get("text"), hit.get("section_path")),
-        "features": features,
-    }
-    level, policy = classify_sensitivity(data_type="gazetteer", evidence_unit=classify_unit)
+    text = _first_nonempty(hit.get("preview"), hit.get("text"), hit.get("section_path"))
+    level, policy = classify_sensitivity(
+        data_type="gazetteer",
+        evidence_unit={"text": text, "features": features},
+    )
 
     payload = build_evidence_unit(
         evidence_id=_road_traffic_evidence_id(hit),
         data_type="gazetteer",
-        text=_first_nonempty(hit.get("preview"), hit.get("text"), hit.get("section_path")),
+        text=text,
         source_id=hit.get("source_id") or source_id,
         source_path=hit.get("source_path") or None,
         granularity="paragraph",
@@ -687,12 +687,12 @@ def adapt_surveillance_hit(
     rank: int | None = None,
     source_id: str = "surveillance_index",
 ) -> dict[str, Any]:
-    """surveillance 命中映射。预期字段:``doc_id`` / ``caption`` / ``objects`` /
-    ``bbox`` / ``clip_start`` / ``clip_end`` / ``behavior`` / ``camera_id`` /
-    ``video_uri``。
+    """surveillance 命中映射。预期字段:``doc_id`` / ``summary`` / ``clip_start`` /
+    ``clip_end`` / ``objects`` / ``behavior`` / ``stream_url`` 等。
 
-    视频监控**默认 PII 敏感**;``sensitivity_level=pii_masked`` /
-    ``access_policy=restricted`` 由 adapter 兜底,各 skill 不应擅自降级。
+    spec 2026-05-27 §3:级别由 :func:`classify_sensitivity` 按字段内容预标
+    (默认 ``restricted``,打码且无 streaming/具体点位可降为 ``pii_masked``,
+    仅聚合统计且 k>=10 可降为 ``aggregated_safe``)。
     """
     features = {
         key: hit[key]
@@ -700,7 +700,7 @@ def adapt_surveillance_hit(
             "objects", "bbox", "clip_start", "clip_end", "behavior",
             "camera_id", "video_uri", "stream_url", "playback_url", "channel_id",
             "camera_location", "target_count", "people_count", "vehicle_count",
-            "unique_targets",
+            "unique_targets", "source_kind", "public",
         )
         if hit.get(key) is not None
     }
