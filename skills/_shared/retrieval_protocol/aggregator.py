@@ -1,6 +1,6 @@
 """检索结果聚合（纯 stdlib）—— task.md 反馈 #3 的聚合层。
 
-把并行 retrieve 返回的多份 SkillResult 按 query_id 对齐成桶,逐桶去重,
+把并行 retrieve 返回的多份 SkillResult 按 query_id 对齐成桶,桶间全局去重,
 全局排序,按 Plan 总预算兜底裁剪,产出一份统一 SkillResult。
 
 对齐契约: ``skill_results`` 每条 = ``{"query_id": str, "skill_result": dict}``
@@ -57,15 +57,52 @@ class Aggregator:
         plan: Plan,
         skill_results: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """对齐 → 去重 → 排序（→ 裁剪在 Task 4 补）。返回统一 SkillResult。"""
-        # 1. 收集所有 wrapper(按出现顺序),逐桶去重
+        """对齐 → 去重 → 排序 → 按 plan.total_budget 兜底裁剪。返回统一 SkillResult。"""
         deduped = self._collect_and_dedup(skill_results)
-        # 2. 全局排序
         deduped.sort(key=self._sort_key)
-        # 3. 组装统一 SkillResult
+
+        kept, clipped = self._clip_to_budget(deduped, plan.total_budget)
+
         errors: list[dict[str, Any]] = []
         status = "success"
-        return self._build_result(deduped, errors=errors, status=status)
+        if clipped:
+            errors.append(build_error(
+                code="E_OUT_OF_BUDGET",
+                message=(
+                    f"聚合证据超预算,已裁剪 {clipped} 条,保留 {len(kept)} 条。"
+                ),
+                detail={"kept": len(kept), "clipped": clipped},
+            ))
+            status = STATUS_PARTIAL
+        return self._build_result(kept, errors=errors, status=status)
+
+    def _clip_to_budget(
+        self,
+        evidence: list[dict[str, Any]],
+        total_budget: dict[str, Any] | None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """按 total_budget 裁剪;返回 (保留列表, 被裁剪条数)。无预算则不裁。"""
+        if not total_budget:
+            return evidence, 0
+        original = len(evidence)
+        kept = evidence
+
+        max_count = total_budget.get("max_evidence_count")
+        if isinstance(max_count, int) and not isinstance(max_count, bool):
+            kept = kept[:max_count]
+
+        max_token = total_budget.get("max_token_estimate")
+        if isinstance(max_token, int) and not isinstance(max_token, bool):
+            budgeted: list[dict[str, Any]] = []
+            running = 0
+            for wrapper in kept:
+                running += self._token_estimator(wrapper)
+                if running > max_token:
+                    break
+                budgeted.append(wrapper)
+            kept = budgeted
+
+        return kept, original - len(kept)
 
     def _collect_and_dedup(
         self, skill_results: list[dict[str, Any]]
