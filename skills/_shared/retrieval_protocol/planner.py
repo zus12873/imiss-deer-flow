@@ -10,6 +10,7 @@ PlannerMiddleware(S3)与 SkillRouter 的职责。本模块只做结构化输出�
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,3 +65,56 @@ def split_budget(
         for i, part_value in enumerate(_split_one(value, fan_out, weights)):
             result[i][field_name] = part_value
     return result
+
+
+@dataclass(frozen=True)
+class RetrievalTask:
+    """一个并行可调度的 retrieve 任务。"""
+    query_id: str
+    envelope: dict[str, Any]
+    parallel_group: int = 0
+
+
+@dataclass
+class Plan:
+    """一条复合检索的拆解结果。"""
+    parent_query_id: str
+    tasks: list[RetrievalTask] = field(default_factory=list)
+    total_budget: dict[str, Any] | None = None
+
+
+def build_plan(
+    *,
+    parent_query_id: str,
+    subqueries: list[dict[str, Any]],
+    total_budget: dict[str, Any] | None = None,
+) -> Plan:
+    """把已路由好的子问题组织成 Plan;给定 total_budget 时按 weight 注入拆分预算。
+
+    ``subqueries`` 每条 = ``{query_id, envelope, parallel_group?, weight?}``。
+    本函数**深拷贝**每个 envelope,不修改调用方入参。若 ``total_budget`` 给出,
+    按各子问题的 ``weight``(缺省 1.0)调用 :func:`split_budget`,把拆分后的
+    budget 注入对应 task 的 ``envelope["budget"]``。
+    """
+    if not subqueries:
+        raise ValueError("subqueries must be non-empty")
+
+    envelopes = [copy.deepcopy(sq["envelope"]) for sq in subqueries]
+
+    if total_budget is not None:
+        weights = [float(sq.get("weight", 1.0)) for sq in subqueries]
+        # 全部缺省权重时退化为等权(传 None 让 split_budget 走整除路径)
+        use_weights = None if all(w == 1.0 for w in weights) else weights
+        parts = split_budget(total_budget, len(subqueries), weights=use_weights)
+        for env, part in zip(envelopes, parts):
+            env["budget"] = part
+
+    tasks = [
+        RetrievalTask(
+            query_id=sq["query_id"],
+            envelope=env,
+            parallel_group=int(sq.get("parallel_group", 0)),
+        )
+        for sq, env in zip(subqueries, envelopes)
+    ]
+    return Plan(parent_query_id=parent_query_id, tasks=tasks, total_budget=total_budget)
