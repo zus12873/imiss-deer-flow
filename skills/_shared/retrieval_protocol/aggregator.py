@@ -117,7 +117,10 @@ class Aggregator:
     def _collect_and_dedup(
         self, skill_results: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """逐桶按 dedup_key 去重,保留 sort_key 最优一条;桶间合并后再全局去重。"""
+        """跨所有桶单趟按 dedup_key 全局去重,同键保留 sort_key 最优一条;
+
+        保持首次出现顺序(后续全局排序会再覆盖,此处仅作稳定的并列次序)。
+        """
         best: dict[str, dict[str, Any]] = {}
         order: list[str] = []
         for item in skill_results:
