@@ -356,6 +356,39 @@ class TestSurveillance(unittest.TestCase):
         self.assertEqual(payload["meta"]["sensitivity_level"], "pii_masked")
         self.assertEqual(payload["meta"]["access_policy"], "internal_only")
 
+    def test_new_format_video_record(self):
+        """5/29 实际形态: video_id / camera_id / raw_segment_uri / started_at /
+        ended_at / labels / object_summary / location。"""
+        hit = {
+            "video_id": "vid_001",
+            "camera_id": "cam_42",
+            "filename": "20240301_10_42.mp4",
+            "raw_segment_uri": "s3://surv/vid_001.mp4",
+            "started_at": "2024-03-01T10:00:00+08:00",
+            "ended_at": "2024-03-01T10:30:00+08:00",
+            "labels": ["traffic", "intersection"],
+            "object_summary": {"person": 12, "car": 34},
+            "location": {"city": "Shanghai", "camera_lat": 31.235, "camera_lon": 121.505},
+            "metadata": {"frame_rate": 25, "resolution": "1920x1080"},
+            "score": 0.91,
+        }
+        wrapper = adapters.adapt_surveillance_hit(hit, rank=1)
+        _assert_valid(self, wrapper)
+        payload = wrapper["payload"]
+        self.assertEqual(payload["evidence_id"], "vid_001")
+        self.assertEqual(payload["meta"]["source_path"], "s3://surv/vid_001.mp4")
+        tr = payload["meta"]["time_range"]
+        self.assertEqual(tr["start"], "2024-03-01T10:00:00+08:00")
+        self.assertEqual(tr["end"], "2024-03-01T10:30:00+08:00")
+        geo = payload["meta"]["geo_scope"]
+        self.assertEqual(geo["city"], "Shanghai")
+        self.assertEqual(geo["lat"], 31.235)
+        self.assertEqual(geo["lon"], 121.505)
+        feats = payload["meta"]["features"]
+        for key in ("video_id", "camera_id", "filename", "raw_segment_uri",
+                    "labels", "object_summary", "location", "metadata"):
+            self.assertIn(key, feats, msg=f"missing {key}")
+
 
 class TestBatchAdapters(unittest.TestCase):
     """逐 adapter 的 *_result 接口应当对齐 rank 编号(从 1 开始)。"""

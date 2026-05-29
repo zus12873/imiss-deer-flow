@@ -194,6 +194,8 @@ level, policy = classify_sensitivity(
 
 > **5/29 对齐**：实际数据形态是嵌套 `metadata.{latitude, longitude, address.*}`，无 `bbox`，无人脸/号牌遮挡假设。adapter 同时兼容旧顶层字段（`lat`/`lon`/`city`/`objects`/`bbox`/...）。敏感度判定路径：精确经纬度（≥4 位小数）仍由 `_has_struct_id` 的 LATLON 正则升 `restricted`；详细门牌地址（`address.formatted_address` + `street_number`）属字符串，不触发 PII 正则但落进 features，由上层合规检测器二次判定。
 
+> **5/29 对齐**（surveillance）：实际数据形态是 `video_id / camera_id / filename / raw_segment_uri / started_at / ended_at / labels / object_summary / location.{city,camera_lat,camera_lon} / metadata.{...}`，无逐帧 bbox。adapter 同时兼容旧顶层字段（`clip_start`/`clip_end`/`stream_url`/`objects` 等）。`object_summary` 是计数聚合（如 `{"person": 12, "car": 34}`），不是逐目标列表，不会触发 `_has_unmasked_face_plate`。当前形态下默认仍是 `restricted`（无 `objects` 列表 = 无法判定打码 = 保守取顶档），与师兄反馈"yolo 打码理论可做未测试"一致。
+
 ## 审计字段扩展（spec 2026-05-27 §4）
 
 `RetrievalMiddleware.call` 新增可选入参，自动注入到 audit record：
