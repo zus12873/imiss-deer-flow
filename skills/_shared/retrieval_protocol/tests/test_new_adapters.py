@@ -250,6 +250,47 @@ class TestStreetview(unittest.TestCase):
         self.assertIn("objects", payload["meta"]["features"])
         self.assertEqual(payload["meta"]["features"]["image_uri"], "s3://streetview/sv-001.jpg")
 
+    def test_new_format_metadata_address(self):
+        """5/29 实际形态: hit.metadata.{latitude, longitude, address.{...}}。"""
+        hit = {
+            "_id": "EQ8RlaMMjkqWPCy0WoItIg_012_030",
+            "source_path": "/mnt/nas/streetview_meta/.../EQ8RlaMMjkqWPCy0WoItIg_012_030.png",
+            "metadata": {
+                "latitude": 34.261,
+                "longitude": 108.946,
+                "address": {
+                    "formatted_address": "陕西省西安市碑林区北大街1号",
+                    "business": "钟楼",
+                    "country": "中国",
+                    "province": "陕西省",
+                    "city": "西安市",
+                    "district": "碑林区",
+                    "street": "北大街",
+                    "street_number": "1号",
+                    "adcode": "610103",
+                    "sematic_description": "钟楼东北侧15米",
+                    "pois": [
+                        {"name": "钟楼", "tag": "旅游景点", "distance": "15", "direction": "东"},
+                    ],
+                    "roads": [{"name": "北大街", "distance": "15"}],
+                },
+            },
+            "score": 0.85,
+        }
+        wrapper = adapters.adapt_streetview_hit(hit, rank=1)
+        _assert_valid(self, wrapper)
+        payload = wrapper["payload"]
+        geo = payload["meta"]["geo_scope"]
+        self.assertEqual(geo.get("lat"), 34.261)
+        self.assertEqual(geo.get("lon"), 108.946)
+        self.assertEqual(geo.get("city"), "西安市")
+        self.assertEqual(geo.get("district"), "碑林区")
+        feats = payload["meta"]["features"]
+        self.assertIn("address", feats)
+        self.assertEqual(feats["address"]["formatted_address"], "陕西省西安市碑林区北大街1号")
+        self.assertEqual(feats["address"]["business"], "钟楼")
+        self.assertEqual(len(feats["address"]["pois"]), 1)
+
 
 class TestRemoteSensing(unittest.TestCase):
     def test_change_detection(self):

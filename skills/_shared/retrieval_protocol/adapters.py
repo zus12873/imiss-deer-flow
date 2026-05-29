@@ -541,28 +541,56 @@ def adapt_streetview_hit(
     rank: int | None = None,
     source_id: str = "streetview_index",
 ) -> dict[str, Any]:
-    """streetview 命中映射。预期字段:``doc_id`` / ``caption`` / ``objects`` /
-    ``bbox`` / ``taken_at`` / ``lat`` / ``lon`` / ``city`` / ``image_uri``。
+    """streetview 命中映射。
 
-    图像本体由上层挂到 ``result.artifacts[]``;本层只保留 ``image_uri``
-    至 ``features``,以便上层装配 artifact。
+    支持两种输入形态:
+    1. 旧形态(顶层): doc_id / caption / objects / bbox / taken_at / lat / lon /
+       city / image_uri
+    2. 5/29 新形态(嵌套): _id / source_path / metadata.{latitude, longitude,
+       address.{formatted_address, business, country, province, city,
+       district, street, street_number, adcode, sematic_description,
+       pois[], roads[]}}; 无 bbox / 无人脸号牌遮挡
+
+    优先取嵌套形态字段;两种形态可并存。
     """
-    features = {
-        key: hit[key]
-        for key in (
-            "objects", "bbox", "taken_at", "heading", "image_uri",
-            "target_count", "category", "source_kind", "public", "unique_targets",
-        )
-        if hit.get(key) is not None
-    }
+    metadata = hit.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    address = metadata.get("address") if isinstance(metadata, dict) else None
 
+    # features: 既有字段 + 新增 address 嵌套结构
+    features: dict[str, Any] = {}
+    for key in (
+        "objects", "bbox", "taken_at", "heading", "image_uri",
+        "target_count", "category", "source_kind", "public", "unique_targets",
+    ):
+        if hit.get(key) is not None:
+            features[key] = hit[key]
+    if isinstance(address, dict):
+        features["address"] = address
+
+    # geo_scope: 优先 metadata.* > 顶层
     geo: dict[str, Any] = {}
-    if hit.get("city"):
-        geo["city"] = hit["city"]
-    if hit.get("lat") is not None:
-        geo["lat"] = hit["lat"]
-    if hit.get("lon") is not None:
-        geo["lon"] = hit["lon"]
+    lat = metadata.get("latitude")
+    if lat is None:
+        lat = hit.get("lat")
+    lon = metadata.get("longitude")
+    if lon is None:
+        lon = hit.get("lon")
+    if lat is not None:
+        geo["lat"] = lat
+    if lon is not None:
+        geo["lon"] = lon
+    city = (address or {}).get("city") if isinstance(address, dict) else hit.get("city")
+    if not city:
+        city = hit.get("city")
+    if city:
+        geo["city"] = city
+    district = (address or {}).get("district") if isinstance(address, dict) else hit.get("district")
+    if not district:
+        district = hit.get("district")
+    if district:
+        geo["district"] = district
     if hit.get("bbox"):
         geo["bbox"] = hit["bbox"]
 
@@ -575,14 +603,19 @@ def adapt_streetview_hit(
             "timezone": hit.get("timezone") or "Asia/Shanghai",
         }
 
-    text = _first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary"))
+    text = _first_nonempty(
+        hit.get("caption"),
+        hit.get("text"),
+        hit.get("summary"),
+        (address or {}).get("formatted_address") if isinstance(address, dict) else "",
+    )
     level, policy = classify_sensitivity(
         data_type="streetview",
         evidence_unit={"text": text, "features": features},
     )
 
     payload = build_evidence_unit(
-        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or hit.get("_id") or "",
         data_type="streetview",
         text=text,
         source_id=hit.get("source_id") or source_id,
@@ -595,7 +628,7 @@ def adapt_streetview_hit(
         features=features,
     )
     return build_retrieval_evidence(
-        evidence_ref=hit.get("doc_id") or "",
+        evidence_ref=hit.get("doc_id") or hit.get("_id") or "",
         rank=rank,
         score=hit.get("score"),
         method="clip_vector",
