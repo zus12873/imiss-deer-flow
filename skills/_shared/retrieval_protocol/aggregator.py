@@ -81,7 +81,17 @@ class Aggregator:
         evidence: list[dict[str, Any]],
         total_budget: dict[str, Any] | None,
     ) -> tuple[list[dict[str, Any]], int]:
-        """按 total_budget 裁剪;返回 (保留列表, 被裁剪条数)。无预算则不裁。"""
+        """按 total_budget 裁剪;返回 (保留列表, 被裁剪条数)。无预算则不裁。
+
+        budget 是**硬上限**(task.md #2:避免撑爆上下文)。先按 max_evidence_count
+        截前 N,再按 max_token_estimate 累计裁剪。token 裁剪用严格 `>`:
+        累计 token 一旦超过 max_token_estimate 即停,不收当前及后续条目。
+
+        边界:若**单条** evidence 的 token 估计已超过 max_token_estimate,
+        则一条都不保留(返回空列表 + 全部计入 clipped)。这是有意为之 ——
+        预算是硬约束,宁可返回空也不送一条撑爆上下文的证据;调用方据此
+        E_OUT_OF_BUDGET + status=partial 可判断是预算过紧。
+        """
         if not total_budget:
             return evidence, 0
         original = len(evidence)
