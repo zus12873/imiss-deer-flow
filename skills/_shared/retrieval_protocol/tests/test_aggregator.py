@@ -123,5 +123,62 @@ class TestAggregateHooks(unittest.TestCase):
         self.assertEqual(out["status"], "success")
 
 
+class TestAggregateBudget(unittest.TestCase):
+    def test_clip_by_max_evidence_count(self):
+        plan = _plan(["q1"], total_budget={"max_evidence_count": 2})
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("a", 0.9), _wrapper("b", 0.8), _wrapper("c", 0.7),
+            ])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        ev = out["result"]["evidence"]
+        self.assertEqual(len(ev), 2)
+        # 保留分高的前 2
+        self.assertEqual([w["payload"]["evidence_id"] for w in ev], ["a", "b"])
+        self.assertEqual(out["status"], "partial")
+        codes = [e["code"] for e in out["errors"]]
+        self.assertIn("E_OUT_OF_BUDGET", codes)
+
+    def test_clip_by_max_token_estimate(self):
+        plan = _plan(["q1"], total_budget={"max_token_estimate": 5})
+        # token = len(text)//4; text 长 20 → 5 token 一条就到顶
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("a", 0.9, text="x" * 20),
+                _wrapper("b", 0.8, text="x" * 20),
+            ])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        ev = out["result"]["evidence"]
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["payload"]["evidence_id"], "a")
+        self.assertEqual(out["status"], "partial")
+        self.assertIn("E_OUT_OF_BUDGET", [e["code"] for e in out["errors"]])
+
+    def test_no_clip_when_within_budget(self):
+        plan = _plan(["q1"], total_budget={"max_evidence_count": 10})
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("a", 0.9), _wrapper("b", 0.8),
+            ])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        self.assertEqual(len(out["result"]["evidence"]), 2)
+        self.assertEqual(out["status"], "success")
+        self.assertEqual(out["errors"], [])
+
+    def test_no_budget_no_clip(self):
+        plan = _plan(["q1"])  # total_budget=None
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper(f"e{i}", 0.5) for i in range(50)
+            ])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        self.assertEqual(len(out["result"]["evidence"]), 50)
+        self.assertEqual(out["status"], "success")
+
+
 if __name__ == "__main__":
     unittest.main()
