@@ -556,7 +556,7 @@ def adapt_streetview_hit(
     metadata = hit.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
-    address = metadata.get("address") if isinstance(metadata, dict) else None
+    address = metadata.get("address")
 
     # features: 既有字段 + 新增 address 嵌套结构
     features: dict[str, Any] = {}
@@ -581,12 +581,12 @@ def adapt_streetview_hit(
         geo["lat"] = lat
     if lon is not None:
         geo["lon"] = lon
-    city = (address or {}).get("city") if isinstance(address, dict) else hit.get("city")
+    city = address.get("city") if isinstance(address, dict) else None
     if not city:
         city = hit.get("city")
     if city:
         geo["city"] = city
-    district = (address or {}).get("district") if isinstance(address, dict) else hit.get("district")
+    district = address.get("district") if isinstance(address, dict) else None
     if not district:
         district = hit.get("district")
     if district:
@@ -607,7 +607,7 @@ def adapt_streetview_hit(
         hit.get("caption"),
         hit.get("text"),
         hit.get("summary"),
-        (address or {}).get("formatted_address") if isinstance(address, dict) else "",
+        address.get("formatted_address") if isinstance(address, dict) else "",
     )
     level, policy = classify_sensitivity(
         data_type="streetview",
