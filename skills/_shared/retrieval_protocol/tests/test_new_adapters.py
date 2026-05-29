@@ -336,6 +336,44 @@ class TestRemoteSensing(unittest.TestCase):
         self.assertEqual(payload["meta"]["features"]["tile_id"], "T08-12")
         self.assertAlmostEqual(payload["meta"]["features"]["change_score"], 0.72)
 
+    def test_new_format_imagery_record(self):
+        """5/29 实际形态: id / title / content / similarity / url / hash /
+        resolution / exif。"""
+        hit = {
+            "id": "rs-new-001",
+            "title": "瓦片 T08-12 影像",
+            "content": "陕西省西安市碑林区上空 0.5m 分辨率",
+            "similarity": 0.82,
+            "rank": 3,
+            "url": "s3://rs/rs-new-001.tif",
+            "hash": "sha256:abc123",
+            "resolution": "0.5m",
+            "exif": {"capture_time": "2024-03-15T10:00:00+08:00"},
+        }
+        wrapper = adapters.adapt_remote_sensing_hit(hit, rank=1)
+        _assert_valid(self, wrapper)
+        payload = wrapper["payload"]
+        self.assertEqual(payload["evidence_id"], "rs-new-001")
+        self.assertEqual(payload["meta"]["source_path"], "s3://rs/rs-new-001.tif")
+        self.assertTrue(payload["text"])
+        self.assertIn("瓦片", payload["text"])
+        feats = payload["meta"]["features"]
+        for key in ("id", "title", "content", "similarity", "url", "hash",
+                    "resolution", "exif"):
+            self.assertIn(key, feats, msg=f"missing {key}")
+
+    def test_new_format_with_precise_coord_in_text_upgrades(self):
+        """content 中含明文精确经纬度应升 restricted (struct_id LATLON 正则)."""
+        hit = {
+            "id": "rs-002",
+            "title": "瓦片",
+            "content": "中心点 121.4738, 31.2304",  # LATLON 4 位小数命中正则
+            "url": "s3://rs/rs-002.tif",
+        }
+        wrapper = adapters.adapt_remote_sensing_hit(hit)
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
+
 
 class TestSurveillance(unittest.TestCase):
     def test_default_restricted(self):
