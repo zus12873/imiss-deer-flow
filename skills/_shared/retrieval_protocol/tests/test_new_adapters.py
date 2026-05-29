@@ -193,6 +193,21 @@ class TestTelecom(unittest.TestCase):
                     "source_table", "source_refs"):
             self.assertIn(key, feats, msg=f"missing {key}")
 
+    def test_call_edge_e2e_upgrades_to_restricted(self):
+        """通话边 evidence 经过 adapter 后, sensitivity_level 应自动升为 restricted。"""
+        hit = {
+            "doc_id": "tc-ce-up",
+            "summary": "call edge restricted",
+            "src_user_id": "u_hash_src",
+            "event_time": "2024-03-01T10:00:00+08:00",
+            "station": "station_hash_42",
+            "score": 0.8,
+        }
+        wrapper = adapters.adapt_telecom_hit(hit)
+        payload = wrapper["payload"]
+        self.assertEqual(payload["meta"]["sensitivity_level"], "restricted")
+        self.assertEqual(payload["meta"]["access_policy"], "restricted")
+
 
 class TestCode(unittest.TestCase):
     def test_locator_and_features(self):

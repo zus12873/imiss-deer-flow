@@ -209,6 +209,36 @@ class TestClassifyTelecom(unittest.TestCase):
         self.assertEqual(sr.classify_sensitivity(data_type="telecom", evidence_unit=unit),
                          ("restricted", "restricted"))
 
+    def test_real_call_edge_field_names_upgrade_restricted(self):
+        """src_user_id + event_time + station 组合应升 restricted (即使全部哈希化)。"""
+        level, policy = sr.classify_sensitivity(
+            data_type="telecom",
+            evidence_unit={
+                "text": "call edge",
+                "features": {
+                    "src_user_id": "u_hash_a3f5",
+                    "event_time": "2024-03-01T10:00:00+08:00",
+                    "station": "station_hash_42",
+                },
+            },
+        )
+        self.assertEqual((level, policy), ("restricted", "restricted"))
+
+    def test_real_call_edge_with_cell_upgrade_restricted(self):
+        """cell 替代 station 也触发升档。"""
+        level, _ = sr.classify_sensitivity(
+            data_type="telecom",
+            evidence_unit={
+                "text": "x",
+                "features": {
+                    "src_user_id": "u_hash",
+                    "event_date": "2024-03-01",
+                    "cell": "cell_hash_7",
+                },
+            },
+        )
+        self.assertEqual(level, "restricted")
+
 
 class TestClassifyCode(unittest.TestCase):
     def test_default(self):

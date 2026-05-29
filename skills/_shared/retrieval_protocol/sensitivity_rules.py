@@ -57,9 +57,15 @@ _RISK_LABEL_FIELDS = (
 _STREAMING_FIELDS = ("stream_url", "playback_url", "channel_id", "camera_id")
 
 _OBJECT_TIME_GEO_TRIPLE = (
-    ("target_id", "object_id", "user_id_hash"),
-    ("timestamp", "time_start", "captured_at", "ts"),
-    ("cell_id", "station_id", "geohash", "bbox", "roaming_place"),
+    # 对象组: 包含原有 + telecom 真实哈希字段
+    ("target_id", "object_id", "user_id_hash",
+     "src_user_id", "dst_counterparty_id"),
+    # 时间组: 包含原有 + telecom 真实字段
+    ("timestamp", "time_start", "captured_at", "ts",
+     "event_time", "event_date", "event_hour"),
+    # 位置组: 包含原有 + telecom 真实字段 (无 _id 后缀)
+    ("cell_id", "station_id", "geohash", "bbox", "roaming_place",
+     "station", "cell"),
 )
 
 
