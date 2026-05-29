@@ -291,6 +291,31 @@ class TestStreetview(unittest.TestCase):
         self.assertEqual(feats["address"]["business"], "钟楼")
         self.assertEqual(len(feats["address"]["pois"]), 1)
 
+    def test_metadata_address_partial_falls_back_to_top_level(self):
+        """metadata.address 存在但缺 city/district 时, 应回退到 hit.city/district。"""
+        hit = {
+            "_id": "partial-001",
+            "metadata": {
+                "latitude": 31.235,
+                "longitude": 121.505,
+                "address": {
+                    "formatted_address": "上海市黄浦区南京东路某号",
+                    # 故意缺 city / district
+                },
+            },
+            "city": "Shanghai",
+            "district": "Huangpu",
+            "score": 0.7,
+        }
+        wrapper = adapters.adapt_streetview_hit(hit)
+        _assert_valid(self, wrapper)
+        geo = wrapper["payload"]["meta"]["geo_scope"]
+        self.assertEqual(geo.get("city"), "Shanghai")
+        self.assertEqual(geo.get("district"), "Huangpu")
+        feats = wrapper["payload"]["meta"]["features"]
+        self.assertIn("address", feats)
+        self.assertEqual(feats["address"]["formatted_address"], "上海市黄浦区南京东路某号")
+
 
 class TestRemoteSensing(unittest.TestCase):
     def test_change_detection(self):
