@@ -135,6 +135,25 @@ class TestBuildPlan(unittest.TestCase):
         # 原始入参 envelope 不应被注入 budget(build_plan 应深拷贝)
         self.assertNotIn("budget", env)
 
+    def test_deep_copies_nested_envelope(self):
+        """build_plan 须深拷贝:task.envelope 的嵌套对象与入参不是同一引用。
+
+        仅断言顶层 budget 不泄漏不足以区分深 / 浅拷贝(浅拷贝也能过),
+        本例直接验证嵌套 dict 的 identity 已断开。
+        """
+        env = self._env("a")
+        plan = planner.build_plan(
+            parent_query_id="root",
+            subqueries=[{"query_id": "q1", "envelope": env}],
+        )
+        task_env = plan.tasks[0].envelope
+        self.assertIsNot(task_env, env)
+        self.assertIsNot(task_env["input"], env["input"])
+        self.assertIsNot(task_env["input"]["parameters"], env["input"]["parameters"])
+        # 改 task 侧嵌套值不应回写入参
+        task_env["input"]["parameters"]["query"] = "MUTATED"
+        self.assertEqual(env["input"]["parameters"]["query"], "a")
+
 
 if __name__ == "__main__":
     unittest.main()
