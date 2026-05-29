@@ -179,6 +179,45 @@ class TestAggregateBudget(unittest.TestCase):
         self.assertEqual(len(out["result"]["evidence"]), 50)
         self.assertEqual(out["status"], "success")
 
+    def test_combined_count_and_token_clip(self):
+        """count 与 token 两个限额同时生效:先截 count 再截 token。"""
+        plan = _plan(["q1"], total_budget={"max_evidence_count": 3, "max_token_estimate": 10})
+        # 4 条,每条 text 长 20 → 5 token。count 先截到 3 条(a,b,c),
+        # 再 token 累计:5(a) → 10(b, 10>10 False 收) → 15(c, 15>10 True 停) → 保留 a,b
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("a", 0.9, text="x" * 20),
+                _wrapper("b", 0.8, text="x" * 20),
+                _wrapper("c", 0.7, text="x" * 20),
+                _wrapper("d", 0.6, text="x" * 20),
+            ])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        ev = out["result"]["evidence"]
+        self.assertEqual([w["payload"]["evidence_id"] for w in ev], ["a", "b"])
+        self.assertEqual(out["status"], "partial")
+        # clipped = 原 4 - 保留 2 = 2
+        codes = [e for e in out["errors"] if e["code"] == "E_OUT_OF_BUDGET"]
+        self.assertEqual(len(codes), 1)
+        self.assertEqual(codes[0]["detail"]["kept"], 2)
+        self.assertEqual(codes[0]["detail"]["clipped"], 2)
+
+    def test_single_oversized_wrapper_yields_zero_kept(self):
+        """单条 evidence 的 token 已超 max_token_estimate → 一条都不保留(有意为之)。"""
+        plan = _plan(["q1"], total_budget={"max_token_estimate": 3})
+        # text 长 20 → 5 token > 3 → running=5 在第一条就 >3, break, 0 保留
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("big", 0.9, text="x" * 20),
+            ])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        self.assertEqual(out["result"]["evidence"], [])
+        self.assertEqual(out["status"], "partial")
+        codes = [e for e in out["errors"] if e["code"] == "E_OUT_OF_BUDGET"]
+        self.assertEqual(codes[0]["detail"]["kept"], 0)
+        self.assertEqual(codes[0]["detail"]["clipped"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
