@@ -474,6 +474,10 @@ def adapt_code_hit(
 
     ``snippet → text``;``file_path + line_start/end → locator``;
     ``lang / ast_node_type / symbol`` 进 ``features``。
+
+    **5/29 备注**: 代码片段 skill 本期仅做敏感词分析,不参与 retrieval。
+    本 adapter 接口保留,供未来检索接入。当前调用方应直接调用敏感词分析
+    skill, 而不经本 adapter。
     """
     locator = build_locator(
         file_path=hit.get("file_path"),
