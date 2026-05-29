@@ -726,55 +726,83 @@ def adapt_surveillance_hit(
     rank: int | None = None,
     source_id: str = "surveillance_index",
 ) -> dict[str, Any]:
-    """surveillance 命中映射。预期字段:``doc_id`` / ``summary`` / ``clip_start`` /
-    ``clip_end`` / ``objects`` / ``behavior`` / ``stream_url`` 等。
+    """surveillance 命中映射。
 
-    spec 2026-05-27 §3:级别由 :func:`classify_sensitivity` 按字段内容预标
-    (默认 ``restricted``,打码且无 streaming/具体点位可降为 ``pii_masked``,
-    仅聚合统计且 k>=10 可降为 ``aggregated_safe``)。
+    支持两种输入形态:
+    1. 旧形态: doc_id / summary / objects / bbox / clip_start / clip_end /
+       behavior / camera_id / camera_lat / camera_lon / stream_url / ...
+    2. 5/29 新形态: video_id / camera_id / filename / raw_segment_uri /
+       started_at / ended_at / labels / object_summary / location.{city,
+       camera_lat, camera_lon} / metadata.{...}; 无逐帧 bbox。
+
+    敏感度: 默认 restricted; 已打码 + 无 streaming + 无具体点位才降到
+    pii_masked; 仅聚合统计 + k>=10 + 无 streaming/未打码才降到
+    aggregated_safe (见 sensitivity_rules._classify_surveillance)。
     """
-    features = {
-        key: hit[key]
-        for key in (
-            "objects", "bbox", "clip_start", "clip_end", "behavior",
-            "camera_id", "video_uri", "stream_url", "playback_url", "channel_id",
-            "camera_location", "target_count", "people_count", "vehicle_count",
-            "unique_targets", "source_kind", "public",
-        )
-        if hit.get(key) is not None
-    }
+    location = hit.get("location") or {}
+    if not isinstance(location, dict):
+        location = {}
 
+    # features: 旧字段 + 新字段一并保留
+    feature_keys = (
+        # 旧形态
+        "objects", "bbox", "clip_start", "clip_end", "behavior",
+        "video_uri", "stream_url", "playback_url", "channel_id",
+        "camera_location", "target_count", "people_count", "vehicle_count",
+        "unique_targets", "source_kind", "public",
+        # 5/29 新形态
+        "video_id", "camera_id", "filename", "raw_segment_uri",
+        "started_at", "ended_at", "labels", "object_summary",
+        "location", "metadata",
+    )
+    features = {key: hit[key] for key in feature_keys if hit.get(key) is not None}
+
+    # geo_scope: 优先 location.* > 顶层
     geo: dict[str, Any] = {}
-    if hit.get("city"):
-        geo["city"] = hit["city"]
-    if hit.get("camera_lat") is not None:
-        geo["lat"] = hit["camera_lat"]
-    if hit.get("camera_lon") is not None:
-        geo["lon"] = hit["camera_lon"]
+    city = location.get("city") or hit.get("city")
+    if city:
+        geo["city"] = city
+    camera_lat = location.get("camera_lat", hit.get("camera_lat"))
+    if camera_lat is not None:
+        geo["lat"] = camera_lat
+    camera_lon = location.get("camera_lon", hit.get("camera_lon"))
+    if camera_lon is not None:
+        geo["lon"] = camera_lon
     if hit.get("landmark"):
         geo["landmark"] = hit["landmark"]
 
+    # time_range: 优先 started_at/ended_at > clip_start/clip_end
+    start = hit.get("started_at") or hit.get("clip_start")
+    end = hit.get("ended_at") or hit.get("clip_end")
     time_range = None
-    if hit.get("clip_start") and hit.get("clip_end"):
+    if start and end:
         time_range = {
             "mode": "absolute",
-            "start": hit["clip_start"],
-            "end": hit["clip_end"],
+            "start": start,
+            "end": end,
             "timezone": hit.get("timezone") or "Asia/Shanghai",
         }
 
-    text = _first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary"))
+    labels = hit.get("labels")
+    labels_text = " ".join(str(item) for item in labels) if isinstance(labels, list) and labels else ""
+    text = _first_nonempty(
+        hit.get("caption"),
+        hit.get("text"),
+        hit.get("summary"),
+        hit.get("filename"),
+        labels_text,
+    )
     level, policy = classify_sensitivity(
         data_type="surveillance",
         evidence_unit={"text": text, "features": features},
     )
 
     payload = build_evidence_unit(
-        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        evidence_id=hit.get("video_id") or hit.get("doc_id") or hit.get("evidence_id") or "",
         data_type="surveillance",
         text=text,
         source_id=hit.get("source_id") or source_id,
-        source_path=hit.get("source_path") or hit.get("video_uri") or None,
+        source_path=hit.get("raw_segment_uri") or hit.get("source_path") or hit.get("video_uri") or None,
         time_range=time_range,
         geo_scope=geo,
         granularity=hit.get("granularity") or "clip",
@@ -783,7 +811,7 @@ def adapt_surveillance_hit(
         features=features,
     )
     return build_retrieval_evidence(
-        evidence_ref=hit.get("doc_id") or "",
+        evidence_ref=hit.get("video_id") or hit.get("doc_id") or "",
         rank=rank,
         score=hit.get("score"),
         method="clip_vector_temporal",
