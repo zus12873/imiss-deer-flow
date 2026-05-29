@@ -652,18 +652,27 @@ def adapt_remote_sensing_hit(
     rank: int | None = None,
     source_id: str = "remote_sensing_index",
 ) -> dict[str, Any]:
-    """remote_sensing 命中映射。预期字段:``doc_id`` / ``caption`` / ``objects`` /
-    ``bbox`` / ``tile_id`` / ``taken_at`` / ``change_score`` / ``image_uri``。
+    """remote_sensing 命中映射。
+
+    支持两种输入形态:
+    1. 旧形态: doc_id / caption / objects / bbox / tile_id / taken_at /
+       change_score / cloud_cover / image_uri
+    2. 5/29 新形态: id / title / content / similarity / rank / url / hash /
+       resolution / exif
+
+    优先取新形态字段;两种形态可并存。
     """
-    features = {
-        key: hit[key]
-        for key in (
-            "objects", "bbox", "tile_id", "taken_at", "change_score",
-            "cloud_cover", "image_uri", "sensitive_facility", "internal_annotation",
-            "source_kind", "public",
-        )
-        if hit.get(key) is not None
-    }
+    # features: 旧字段 + 新字段
+    features: dict[str, Any] = {}
+    for key in (
+        "objects", "bbox", "tile_id", "taken_at", "change_score",
+        "cloud_cover", "image_uri", "sensitive_facility", "internal_annotation",
+        "source_kind", "public",
+        "id", "title", "content", "similarity", "url", "hash",
+        "resolution", "exif",
+    ):
+        if hit.get(key) is not None:
+            features[key] = hit[key]
 
     geo: dict[str, Any] = {}
     if hit.get("bbox"):
@@ -682,18 +691,35 @@ def adapt_remote_sensing_hit(
             "timezone": hit.get("timezone") or "Asia/Shanghai",
         }
 
-    text = _first_nonempty(hit.get("caption"), hit.get("text"), hit.get("summary"))
+    # text: 优先 title + content (新形态), 回落 caption / text / summary (旧形态)
+    title = hit.get("title")
+    content = hit.get("content")
+    if isinstance(title, str) and isinstance(content, str) and title.strip() and content.strip():
+        text = f"{title}\n{content}"
+    else:
+        text = _first_nonempty(
+            title, content,
+            hit.get("caption"), hit.get("text"), hit.get("summary"),
+        )
+
     level, policy = classify_sensitivity(
         data_type="remote_sensing",
         evidence_unit={"text": text, "features": features},
     )
 
+    # evidence_id: 优先 id (新), 回落 doc_id / evidence_id (旧)
+    evidence_id = hit.get("id") or hit.get("doc_id") or hit.get("evidence_id") or ""
+    # source_path: 优先 url (新), 回落 source_path / image_uri (旧)
+    source_path = hit.get("url") or hit.get("source_path") or hit.get("image_uri") or None
+    # score: 优先 similarity (新), 回落 score (旧)
+    score = hit.get("similarity") if hit.get("similarity") is not None else hit.get("score")
+
     payload = build_evidence_unit(
-        evidence_id=hit.get("doc_id") or hit.get("evidence_id") or "",
+        evidence_id=evidence_id,
         data_type="remote_sensing",
         text=text,
         source_id=hit.get("source_id") or source_id,
-        source_path=hit.get("source_path") or hit.get("image_uri") or None,
+        source_path=source_path,
         time_range=time_range,
         geo_scope=geo,
         granularity=hit.get("granularity") or "tile",
@@ -702,9 +728,9 @@ def adapt_remote_sensing_hit(
         features=features,
     )
     return build_retrieval_evidence(
-        evidence_ref=hit.get("doc_id") or "",
+        evidence_ref=hit.get("id") or hit.get("doc_id") or "",
         rank=rank,
-        score=hit.get("score"),
+        score=score,
         method="clip_vector",
         matched_fields=["caption", "objects"],
         payload=payload,
