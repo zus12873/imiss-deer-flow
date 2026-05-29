@@ -116,6 +116,16 @@ from .validate import (
     validate_skill_result,
     validate_time_range,
 )
+from .planner import (
+    Plan,
+    RetrievalTask,
+    build_plan,
+    split_budget,
+)
+from .aggregator import (
+    Aggregator,
+    AggregatorHooks,
+)
 
 __all__ = [
     # schema —— task.md §2 / §4.4
@@ -151,6 +161,13 @@ __all__ = [
     "derive_status",
     "validate_error",
     "validate_errors_block",
+    # planner / aggregator —— task.md 反馈 #2/#3 编排层(S2)
+    "Plan",
+    "RetrievalTask",
+    "build_plan",
+    "split_budget",
+    "Aggregator",
+    "AggregatorHooks",
     # sensitivity_rules —— spec 2026-05-27 §3
     "DEFAULT_SENSITIVITY",
     "K_THRESHOLD_AGGREGATED_SAFE",
