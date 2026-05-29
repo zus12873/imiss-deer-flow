@@ -198,6 +198,8 @@ level, policy = classify_sensitivity(
 
 > **5/29 对齐**（remote_sensing）：实际数据形态是 `id / title / content / similarity / rank / url / hash / resolution / exif`。adapter 优先取新字段（`evidence_id=id`，`source_path=url`，`text=title+content`，`score=similarity`），同时向后兼容旧 `doc_id`/`caption`/`image_uri`。合规重点为"精确地理位置"，由 `_has_struct_id` 的 LATLON 正则覆盖（`content` 中含 4 位以上小数的经纬度即升 `restricted`）。
 
+> **5/29 对齐**（code）：代码片段 skill 当前仅做敏感词分析（密钥/账号 token 检测），不参与 retrieval。本 adapter 接口保留，未启用。
+
 ## 审计字段扩展（spec 2026-05-27 §4）
 
 `RetrievalMiddleware.call` 新增可选入参，自动注入到 audit record：
