@@ -712,6 +712,7 @@ def adapt_remote_sensing_hit(
     # source_path: 优先 url (新), 回落 source_path / image_uri (旧)
     source_path = hit.get("url") or hit.get("source_path") or hit.get("image_uri") or None
     # score: 优先 similarity (新), 回落 score (旧)
+    # similarity 可能为 0.0 (perfectly dissimilar), 不能用 or 短路, 必须用 is not None
     score = hit.get("similarity") if hit.get("similarity") is not None else hit.get("score")
 
     payload = build_evidence_unit(
@@ -728,7 +729,7 @@ def adapt_remote_sensing_hit(
         features=features,
     )
     return build_retrieval_evidence(
-        evidence_ref=hit.get("id") or hit.get("doc_id") or "",
+        evidence_ref=evidence_id,
         rank=rank,
         score=score,
         method="clip_vector",
