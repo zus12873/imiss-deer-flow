@@ -396,18 +396,24 @@ def adapt_telecom_hit(
     rank: int | None = None,
     source_id: str = "telecom_cdr",
 ) -> dict[str, Any]:
-    """telecom CDR 命中映射。预期字段:``doc_id`` / ``summary`` / ``call_count`` /
-    ``unique_contacts`` / ``community_id`` / ``duration_sum``。
+    """telecom 命中映射。features 采用「灵活字典 + 保留字段保护」策略,
+    兼容 4 类 evidence(用户节点 / 通话边 / 设备关系 / 聚合统计)。
 
-    spec 2026-05-27 §3:级别由 :func:`classify_sensitivity` 按字段内容预标。
+    保留字段(不进 features): doc_id / evidence_id / summary / text / title /
+    score / source_id / source_path / granularity / time_start / time_end /
+    timezone。其余字段一律透传进 features,由 :func:`classify_sensitivity`
+    按字段内容预标级别。
+
+    spec 2026-05-27 §3 + 补充回复 5/29: 级别由 classify_sensitivity 按字段
+    内容预标(明文 ID 升 restricted; 哈希 user_id + event_time + station/cell
+    组合升 restricted; 聚合统计 k>=10 降 aggregated_safe)。
     """
-    feature_keys = (
-        "call_count", "unique_contacts", "community_id", "duration_sum",
-        "anomaly_flag", "purefraud_flag", "mutation_flag", "risk_label", "case_priority",
-        "target_id", "object_id", "cell_id", "station_id",
-        "roaming_place", "timestamp", "time_start", "source_kind", "public",
-    )
-    features = {key: hit[key] for key in feature_keys if hit.get(key) is not None}
+    _WRAPPER_RESERVED = {
+        "doc_id", "evidence_id", "summary", "text", "title", "score",
+        "source_id", "source_path", "granularity",
+        "time_start", "time_end", "timezone",
+    }
+    features = {k: v for k, v in hit.items() if k not in _WRAPPER_RESERVED and v is not None}
 
     time_range = None
     if hit.get("time_start") and hit.get("time_end"):
@@ -431,7 +437,7 @@ def adapt_telecom_hit(
         source_id=hit.get("source_id") or source_id,
         source_path=hit.get("source_path") or None,
         time_range=time_range,
-        geo_scope={},  # 通联本身无空间属性;若上层做了基站聚合,在 features 里给 cell_id。
+        geo_scope={},
         granularity=hit.get("granularity") or "user_window",
         sensitivity_level=level,
         access_policy=policy,

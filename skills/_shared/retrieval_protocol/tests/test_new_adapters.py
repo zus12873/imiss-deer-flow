@@ -81,6 +81,118 @@ class TestTelecom(unittest.TestCase):
         })
         self.assertEqual(w["payload"]["meta"]["geo_scope"], {})
 
+    def test_user_node_features_passthrough(self):
+        """用户节点 evidence: 14 个字段全部透传到 features。"""
+        hit = {
+            "doc_id": "tc-un-1",
+            "summary": "user node passthrough",
+            "province": "江苏",
+            "dataset_name": "ds1",
+            "user_id": "u_hash_a3f5",
+            "label": "normal",
+            "sub_label": "purefraud",
+            "age": 35,
+            "open_card_time": "2024-01-01",
+            "access_mode": "4G",
+            "monthly_fee": 88.0,
+            "monthly_flow_mb": 12000,
+            "monthly_call_duration": 380,
+            "caller_ratio_3m": 0.62,
+            "caller_dispersion_3m": 0.41,
+            "cross_province_ratio_3m": 0.08,
+            "broadband_flag": True,
+            "source_table": "user_nodes",
+            "score": 0.9,
+        }
+        wrapper = adapters.adapt_telecom_hit(hit, rank=1)
+        _assert_valid(self, wrapper)
+        feats = wrapper["payload"]["meta"]["features"]
+        for key in ("province", "dataset_name", "user_id", "label", "sub_label",
+                    "age", "open_card_time", "access_mode", "monthly_fee",
+                    "monthly_flow_mb", "monthly_call_duration", "caller_ratio_3m",
+                    "caller_dispersion_3m", "cross_province_ratio_3m",
+                    "broadband_flag", "source_table"):
+            self.assertIn(key, feats, msg=f"missing {key}")
+        # 评分类 / wrapper 顶层字段不应落进 features
+        self.assertNotIn("score", feats)
+        self.assertNotIn("doc_id", feats)
+
+    def test_call_edge_features_passthrough(self):
+        """通话边 evidence: 15 个字段全部透传 + time_range 取 event_time 时不被吞。"""
+        hit = {
+            "doc_id": "tc-ce-1",
+            "summary": "call edge",
+            "province": "江苏",
+            "dataset_name": "ds1",
+            "src_user_id": "u_hash_src",
+            "dst_counterparty_id": "u_hash_dst",
+            "event_time": "2024-03-01T10:00:00+08:00",
+            "event_date": "2024-03-01",
+            "event_hour": 10,
+            "duration": 65,
+            "call_type": "voice",
+            "imei": "imei_hash_xyz",
+            "city": "南京",
+            "county": "玄武",
+            "station": "station_hash_42",
+            "cell": "cell_hash_7",
+            "roaming_place": "place_hash_abc",
+            "counterparty_belong": "中国移动",
+            "source_table": "call_edges",
+            "score": 0.8,
+        }
+        wrapper = adapters.adapt_telecom_hit(hit, rank=2)
+        _assert_valid(self, wrapper)
+        feats = wrapper["payload"]["meta"]["features"]
+        for key in ("src_user_id", "dst_counterparty_id", "event_time",
+                    "event_date", "event_hour", "duration", "call_type", "imei",
+                    "city", "county", "station", "cell", "roaming_place",
+                    "counterparty_belong", "source_table"):
+            self.assertIn(key, feats, msg=f"missing {key}")
+
+    def test_edge_relation_features_passthrough(self):
+        """设备关系 evidence: src_id / dst_id / edge_type / edge_count 等透传。"""
+        hit = {
+            "doc_id": "tc-er-1",
+            "summary": "phone-imei edge",
+            "src_id": "ph_42", "dst_id": "imei_88",
+            "src_type": "phone", "dst_type": "imei",
+            "edge_type": "uses_imei",
+            "dataset": "edges_phone_imei",
+            "user_id": "u_hash_a", "imei": "imei_hash_b",
+            "edge_count": 14,
+            "score": 0.7,
+        }
+        wrapper = adapters.adapt_telecom_hit(hit)
+        _assert_valid(self, wrapper)
+        feats = wrapper["payload"]["meta"]["features"]
+        for key in ("src_id", "dst_id", "src_type", "dst_type", "edge_type",
+                    "dataset", "edge_count"):
+            self.assertIn(key, feats, msg=f"missing {key}")
+
+    def test_aggregated_stat_features_passthrough(self):
+        """聚合统计 evidence: relation_strength / risk_user_count / source_refs 等透传。"""
+        hit = {
+            "doc_id": "tc-agg-1",
+            "summary": "community stats",
+            "community_id": "comm_42",
+            "relation_strength": 0.82,
+            "risk_user_count": 3,
+            "label_count": {"normal": 120, "risk": 3},
+            "cross_province_ratio": 0.14,
+            "caller_dispersion": 0.6,
+            "source_table": "community_stats",
+            "source_refs": ["call_edges#W12", "user_nodes#prov-江苏"],
+            "score": 0.6,
+        }
+        wrapper = adapters.adapt_telecom_hit(hit)
+        _assert_valid(self, wrapper)
+        feats = wrapper["payload"]["meta"]["features"]
+        for key in ("community_id", "relation_strength", "risk_user_count",
+                    "label_count", "cross_province_ratio", "caller_dispersion",
+                    "source_table", "source_refs"):
+            self.assertIn(key, feats, msg=f"missing {key}")
+
 
 class TestCode(unittest.TestCase):
     def test_locator_and_features(self):
