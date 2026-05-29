@@ -305,3 +305,22 @@ from retrieval_protocol import build_network_traffic_skill_result
 cd skills/_shared
 python3 -m unittest discover -s retrieval_protocol/tests -t . -v
 ```
+
+## 编排层：Planner / Aggregator（S2，task.md 反馈 #2/#3）
+
+纯 stdlib，无 LLM、无 Skill 路由、无 LangGraph 接入（那是 S3，单开分支）。
+
+### Planner（`planner.py`）
+
+- `split_budget(total, fan_out, weights=None)`：把总 `budget`（`max_evidence_count` / `max_token_estimate`）按等权或加权拆给 N 个并行 retrieve；整除/取整余数补给第一个任务，保证每字段拆分后 sum 与 total 一致。
+- `build_plan(*, parent_query_id, subqueries, total_budget=None)`：把**已路由好**的子问题（`{query_id, envelope, parallel_group?, weight?}`）组织成 `Plan`；给定 `total_budget` 时按 weight 注入各 task 的 `envelope["budget"]`。深拷贝 envelope，不改入参。
+- 不含 LLM 拆问题语义与 SkillRouter —— 那是 S3 PlannerMiddleware 的职责。
+
+### Aggregator（`aggregator.py`）
+
+- 对齐契约：`aggregate(*, plan, skill_results)`，`skill_results` 每条 = `{"query_id": str, "skill_result": dict}`。
+- 裁剪 5 步：① 桶内按 `dedup_key` 去重（保留 `sort_key` 最优）→ ② 全局按 `sort_key` 排序 → ③ 有 `max_evidence_count` 截前 N → ④ 有 `max_token_estimate` 累计 token 超限即丢后续 → ⑤ 任一裁剪发生 → `status="partial"` + `errors` 追加 `E_OUT_OF_BUDGET`。
+- `AggregatorHooks` 可覆盖 `dedup_key`（默认 `payload.evidence_id`）/ `sort_key`（默认 `-score`）/ `token_estimator`（默认 `len(text)//4`）。
+- 未对齐到 plan 的桶仍并入结果，不静默丢弃。
+
+> **S3（下分支）**：`PlannerMiddleware`（`before_model` 调 LLM 拆子问题 → `build_plan`）+ `AggregatorMiddleware`（`after_model` 收集 retrieve 型 SkillResult → `Aggregator.aggregate`），挂在 `TodoListMiddleware` 之后、`MemoryMiddleware` 之前，由 `config.configurable.retrieval_planning_enabled`（默认 False）开关。
