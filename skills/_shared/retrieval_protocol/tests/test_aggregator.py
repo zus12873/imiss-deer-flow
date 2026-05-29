@@ -1,0 +1,127 @@
+"""aggregator.py 单元测试 —— 对齐/去重/排序/预算裁剪。"""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+
+from retrieval_protocol import aggregator, planner  # noqa: E402
+
+
+def _wrapper(evidence_id, score, text="x"):
+    """构造一条最小 retrieval evidence wrapper。"""
+    return {
+        "evidence_ref": evidence_id,
+        "type": "retrieval",
+        "score": score,
+        "payload": {"evidence_id": evidence_id, "data_type": "netflow", "text": text},
+    }
+
+
+def _skill_result(evidence):
+    return {
+        "schema_version": "1.1",
+        "request_id": "r",
+        "skill_name": "s",
+        "scenario": "netflow",
+        "capability": "evidence_search",
+        "status": "success",
+        "result": {"summary": {}, "findings": [], "evidence": evidence, "artifacts": []},
+        "diagnostics": {},
+        "errors": [],
+    }
+
+
+def _plan(query_ids, total_budget=None):
+    tasks = [planner.RetrievalTask(query_id=q, envelope={}) for q in query_ids]
+    return planner.Plan(parent_query_id="root", tasks=tasks, total_budget=total_budget)
+
+
+class TestAggregateBasic(unittest.TestCase):
+    def test_align_and_merge_two_buckets(self):
+        plan = _plan(["q1", "q2"])
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([_wrapper("e1", 0.9)])},
+            {"query_id": "q2", "skill_result": _skill_result([_wrapper("e2", 0.8)])},
+        ]
+        agg = aggregator.Aggregator()
+        out = agg.aggregate(plan=plan, skill_results=results)
+        ev = out["result"]["evidence"]
+        self.assertEqual(len(ev), 2)
+        self.assertEqual(out["status"], "success")
+
+    def test_dedup_keeps_best_score(self):
+        plan = _plan(["q1", "q2"])
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([_wrapper("dup", 0.5)])},
+            {"query_id": "q2", "skill_result": _skill_result([_wrapper("dup", 0.95)])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        ev = out["result"]["evidence"]
+        self.assertEqual(len(ev), 1)
+        self.assertAlmostEqual(ev[0]["score"], 0.95)
+
+    def test_global_sort_desc_by_score(self):
+        plan = _plan(["q1"])
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("a", 0.3), _wrapper("b", 0.9), _wrapper("c", 0.6),
+            ])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        scores = [w["score"] for w in out["result"]["evidence"]]
+        self.assertEqual(scores, [0.9, 0.6, 0.3])
+
+    def test_unaligned_query_id_still_included(self):
+        plan = _plan(["q1"])
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([_wrapper("a", 0.5)])},
+            {"query_id": "zzz", "skill_result": _skill_result([_wrapper("b", 0.7)])},
+        ]
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=results)
+        # 未对齐的桶仍并入(不静默丢弃)
+        ids = {w["payload"]["evidence_id"] for w in out["result"]["evidence"]}
+        self.assertEqual(ids, {"a", "b"})
+
+
+class TestAggregateHooks(unittest.TestCase):
+    def test_custom_dedup_key(self):
+        plan = _plan(["q1"])
+        # 两条 evidence_id 不同但 text 相同 → 自定义 dedup 按 text 去重
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("a", 0.5, text="same"), _wrapper("b", 0.9, text="same"),
+            ])},
+        ]
+        hooks = aggregator.AggregatorHooks(
+            dedup_key=lambda w: w["payload"]["text"],
+        )
+        out = aggregator.Aggregator(hooks).aggregate(plan=plan, skill_results=results)
+        self.assertEqual(len(out["result"]["evidence"]), 1)
+        self.assertAlmostEqual(out["result"]["evidence"][0]["score"], 0.9)
+
+    def test_custom_sort_key(self):
+        plan = _plan(["q1"])
+        results = [
+            {"query_id": "q1", "skill_result": _skill_result([
+                _wrapper("a", 0.9), _wrapper("b", 0.3),
+            ])},
+        ]
+        # 反向:按 score 升序
+        hooks = aggregator.AggregatorHooks(sort_key=lambda w: w.get("score", 0.0))
+        out = aggregator.Aggregator(hooks).aggregate(plan=plan, skill_results=results)
+        scores = [w["score"] for w in out["result"]["evidence"]]
+        self.assertEqual(scores, [0.3, 0.9])
+
+    def test_empty_results(self):
+        plan = _plan(["q1"])
+        out = aggregator.Aggregator().aggregate(plan=plan, skill_results=[])
+        self.assertEqual(out["result"]["evidence"], [])
+        self.assertEqual(out["status"], "success")
+
+
+if __name__ == "__main__":
+    unittest.main()
