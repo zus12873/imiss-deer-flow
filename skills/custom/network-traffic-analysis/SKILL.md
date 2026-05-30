@@ -162,11 +162,18 @@ Rules:
 - Let `rag_search.py` handle metadata filtering, text retrieval, vector retrieval, fusion, and doc_type soft preference
 - Do not use `--doc-type` unless the user explicitly requests a specific document type
 - Prefer `--dataset-name <dataset>` when the user names a specific indexed dataset; `Virut.pcap` should be normalized to `Virut`
+- Use `--format skillresult` when the result must feed the unified retrieval protocol — it emits a standard `SkillResult` whose `result.evidence[]` carries `evidence_unit` payloads (see `skills/_shared/retrieval_protocol`, task.md《统一检索输入与结果证据格式》); `--format json` / `text` keep their existing behavior for legacy and human-facing use
 
 Command:
 
 ```bash
 cd /mnt/skills/custom/network-traffic-analysis && python3 scripts/rag_search.py --query "<user-question>" --format json
+```
+
+Unified retrieval protocol output (standard `SkillResult` JSON):
+
+```bash
+cd /mnt/skills/custom/network-traffic-analysis && python3 scripts/rag_search.py --query "<user-question>" --format skillresult
 ```
 
 ## Lead-Agent routing

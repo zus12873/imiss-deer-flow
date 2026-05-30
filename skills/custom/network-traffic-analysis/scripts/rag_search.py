@@ -17,6 +17,12 @@ except ImportError:
     os.system(f"{sys.executable} -m pip install pyyaml -q")
     import yaml
 
+# 让统一检索协议库 retrieval_protocol 可被导入（skills/_shared/retrieval_protocol）。
+# 本脚本位于 skills/custom/network-traffic-analysis/scripts/，parents[3] 即 skills/。
+_SHARED_DIR = Path(__file__).resolve().parents[3] / "_shared"
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+
 DEFAULT_INDEX_NAME = "network-traffic-rag"
 DEFAULT_MODEL = "text-embedding-v3-large"
 LOCAL_PROVIDERS = {"sentence-transformers", "local"}
@@ -608,6 +614,21 @@ def build_text_output(result: dict[str, Any]) -> str:
         )
     return "\n".join(lines)
 
+
+def _build_skill_result_output(result: dict[str, Any]) -> dict[str, Any]:
+    """把检索结果包成统一检索协议 SkillResult（task.md §4 / §6.2）。
+
+    映射逻辑下沉到 retrieval_protocol.adapters，本脚本只做薄接入。
+    """
+    try:
+        from retrieval_protocol import build_network_traffic_skill_result
+    except ImportError as exc:
+        raise RuntimeError(
+            "retrieval_protocol 不可用；确认 skills/_shared/retrieval_protocol 已就位"
+        ) from exc
+    return build_network_traffic_skill_result(result)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Search the network traffic RAG Elasticsearch index.")
     parser.add_argument("--query", required=True, help="Natural-language search query")
@@ -617,7 +638,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-file", default=None, help="Restrict search to source_file. Supports substring matching")
     parser.add_argument("--doc-type", action="append", default=[], help="Restrict to one or more doc_type values")
     parser.add_argument("--size", type=int, default=5, help="Maximum number of hits to return")
-    parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+    parser.add_argument("--format", choices=["text", "json", "skillresult"], default="text", help="Output format; skillresult 输出统一检索协议 SkillResult JSON")
     return parser
 
 
@@ -696,6 +717,8 @@ def main() -> int:
         }
         if args.format == "json":
             print(json.dumps(result, ensure_ascii=False))
+        elif args.format == "skillresult":
+            print(json.dumps(_build_skill_result_output(result), ensure_ascii=False))
         else:
             print(build_text_output(result))
         return 0
